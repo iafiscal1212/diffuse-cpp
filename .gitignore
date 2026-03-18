@@ -1,0 +1,15 @@
+build/
+*.o
+*.a
+*.so
+*.dylib
+*.gguf
+*.bin
+*.safetensors
+__pycache__/
+*.pyc
+.cache/
+compile_commands.json
+.DS_Store
+*.swp
+*~
