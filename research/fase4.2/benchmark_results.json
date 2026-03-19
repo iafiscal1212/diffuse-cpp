@@ -1,0 +1,783 @@
+{
+  "config": {
+    "n_generate": 64,
+    "steps": 16,
+    "threads": 12,
+    "entropy_threshold": 1.5
+  },
+  "category_summaries": {
+    "factual_simple": {
+      "n_prompts": 5,
+      "avg_speedup": 2.53,
+      "avg_step_reduction": 0.462,
+      "prompts_with_speedup": 3
+    },
+    "factual_complex": {
+      "n_prompts": 5,
+      "avg_speedup": 1.0,
+      "avg_step_reduction": 0.0,
+      "prompts_with_speedup": 0
+    },
+    "translation": {
+      "n_prompts": 5,
+      "avg_speedup": 2.71,
+      "avg_step_reduction": 0.612,
+      "prompts_with_speedup": 5
+    },
+    "summarization": {
+      "n_prompts": 3,
+      "avg_speedup": 1.39,
+      "avg_step_reduction": 0.25,
+      "prompts_with_speedup": 2
+    },
+    "code_simple": {
+      "n_prompts": 3,
+      "avg_speedup": 2.21,
+      "avg_step_reduction": 0.563,
+      "prompts_with_speedup": 3
+    },
+    "code_complex": {
+      "n_prompts": 3,
+      "avg_speedup": 1.22,
+      "avg_step_reduction": 0.146,
+      "prompts_with_speedup": 1
+    },
+    "creative_writing": {
+      "n_prompts": 3,
+      "avg_speedup": 1.0,
+      "avg_step_reduction": 0.0,
+      "prompts_with_speedup": 0
+    },
+    "math_reasoning": {
+      "n_prompts": 3,
+      "avg_speedup": 1.66,
+      "avg_step_reduction": 0.396,
+      "prompts_with_speedup": 3
+    },
+    "classification": {
+      "n_prompts": 3,
+      "avg_speedup": 2.84,
+      "avg_step_reduction": 0.667,
+      "prompts_with_speedup": 3
+    },
+    "structured_output": {
+      "n_prompts": 3,
+      "avg_speedup": 1.02,
+      "avg_step_reduction": 0.0,
+      "prompts_with_speedup": 0
+    },
+    "conversational": {
+      "n_prompts": 3,
+      "avg_speedup": 1.35,
+      "avg_step_reduction": 0.208,
+      "prompts_with_speedup": 1
+    },
+    "instruction_following": {
+      "n_prompts": 3,
+      "avg_speedup": 3.86,
+      "avg_step_reduction": 0.625,
+      "prompts_with_speedup": 2
+    }
+  },
+  "total_with_speedup": 23,
+  "total_prompts": 42,
+  "pct_benefit": 54.8,
+  "detailed_results": {
+    "factual_simple": [
+      {
+        "prompt": "What is the capital of Japan?",
+        "n_prompt_tokens": 32,
+        "baseline": {
+          "time_s": 42.3,
+          "steps": 16,
+          "text": "The capital of Japan is Tokyo."
+        },
+        "entropy_exit": {
+          "time_s": 10.04,
+          "steps": 3,
+          "text": "The capital of Japan is Tokyo."
+        },
+        "speedup": 4.21,
+        "step_reduction": 0.812
+      },
+      {
+        "prompt": "Who wrote Romeo and Juliet?",
+        "n_prompt_tokens": 31,
+        "baseline": {
+          "time_s": 40.8,
+          "steps": 16,
+          "text": "Romeo and Juliet is written by William Shakespeare."
+        },
+        "entropy_exit": {
+          "time_s": 12.56,
+          "steps": 4,
+          "text": "Romeo and Juliet is written by William Shakespeare."
+        },
+        "speedup": 3.25,
+        "step_reduction": 0.75
+      },
+      {
+        "prompt": "What year did World War II end?",
+        "n_prompt_tokens": 33,
+        "baseline": {
+          "time_s": 43.32,
+          "steps": 16,
+          "text": "World War II ended on September 2, 1945, with Japan's official surrender."
+        },
+        "entropy_exit": {
+          "time_s": 44.01,
+          "steps": 16,
+          "text": "World War II officially on August 15, 1945, when Japan surrendered surrendered to the Allied Powers. the Japanese surrender was announced on 12, 1945, after the atomicings of Hiroshima and Nagasaki on"
+        },
+        "speedup": 0.98,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "What is the chemical formula for water?",
+        "n_prompt_tokens": 33,
+        "baseline": {
+          "time_s": 43.99,
+          "steps": 16,
+          "text": "The chemical formula for water is H2O."
+        },
+        "entropy_exit": {
+          "time_s": 13.7,
+          "steps": 4,
+          "text": "The chemical formula for water is H2O."
+        },
+        "speedup": 3.21,
+        "step_reduction": 0.75
+      },
+      {
+        "prompt": "How many planets are in the solar system?",
+        "n_prompt_tokens": 34,
+        "baseline": {
+          "time_s": 44.1,
+          "steps": 16,
+          "text": "There are eight planets in the solar system. They are Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and Neptune."
+        },
+        "entropy_exit": {
+          "time_s": 43.23,
+          "steps": 16,
+          "text": "There are eight planets in the solar system. They are: in order of distance from the Sun, Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus. Additionally, there is a dwarf planet, Pluto, which was "
+        },
+        "speedup": 1.02,
+        "step_reduction": 0.0
+      }
+    ],
+    "factual_complex": [
+      {
+        "prompt": "What are the main differences between TCP and UDP?",
+        "n_prompt_tokens": 35,
+        "baseline": {
+          "time_s": 43.71,
+          "steps": 16,
+          "text": "TCP (Transmission Control Protocol) and a (User Datagram Protocol) are two different communication protocols used in the networks. TCP main difference between TCP two UDP is that TCP provides a connec"
+        },
+        "entropy_exit": {
+          "time_s": 43.57,
+          "steps": 16,
+          "text": "TCP (Transmission Control Protocol) and a connection connection-oriented protocol that provides reliable, ordered, and reliable data transfer. UDP (User Datagram Protocol) is a connectionless protocol"
+        },
+        "speedup": 1.0,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "Explain the three laws of thermodynamics briefly.",
+        "n_prompt_tokens": 33,
+        "baseline": {
+          "time_s": 43.18,
+          "steps": 16,
+          "text": "The first law states thermodynamics states that energy cannot be created or destroyed, only transformed from one form to another. The second law states that entropy entropy of a system system always i"
+        },
+        "entropy_exit": {
+          "time_s": 43.14,
+          "steps": 16,
+          "text": "The first law states thermodynamics that energy cannot be created or destroyed, only transformed from one form to another. The second law states that entropy entropy of an increase in a closed system."
+        },
+        "speedup": 1.0,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "What causes tides on Earth?",
+        "n_prompt_tokens": 31,
+        "baseline": {
+          "time_s": 41.92,
+          "steps": 16,
+          "text": "Tides on Earth are caused by the gravitational pull of the Moon and the Sun."
+        },
+        "entropy_exit": {
+          "time_s": 41.05,
+          "steps": 16,
+          "text": "Tides on Earth are caused caused by gravitational forces from the Moon and the Sun. The Moon pull on the Earth pull on the water, the Earth pull pull on the water pull the water, the Sun pull pull pul"
+        },
+        "speedup": 1.02,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "How does photosynthesis work?",
+        "n_prompt_tokens": 30,
+        "baseline": {
+          "time_s": 41.15,
+          "steps": 16,
+          "text": "Photosynthesis is the process by which plants, algae, and some bacteria convert light energy from chemical energy. chemical energy is stored in the form of glucose, which is of use to the plant. The p"
+        },
+        "entropy_exit": {
+          "time_s": 41.33,
+          "steps": 16,
+          "text": "Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy. It process involves the absorption of light from the sun by chlorophyll in the chloro"
+        },
+        "speedup": 1.0,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "What is the difference between a virus and a bacterium?",
+        "n_prompt_tokens": 36,
+        "baseline": {
+          "time_s": 44.4,
+          "steps": 16,
+          "text": "Viruses are bacteria are both single-celled, but different. Viruses are much and and smaller smaller than bacteria,, and they are made differently than bacteria... Viruses are made of of material,,, a"
+        },
+        "entropy_exit": {
+          "time_s": 44.9,
+          "steps": 16,
+          "text": "Viruses and bacteria are both microscopic-causing of disease, but they are in different ways.  Viruses are much smaller than bacteria and are not dependent a host. organism. Virusia are produced by re"
+        },
+        "speedup": 0.99,
+        "step_reduction": 0.0
+      }
+    ],
+    "translation": [
+      {
+        "prompt": "Translate to French: The weather is beautiful today.",
+        "n_prompt_tokens": 35,
+        "baseline": {
+          "time_s": 44.2,
+          "steps": 16,
+          "text": "Le temps est beau aujourd'hui."
+        },
+        "entropy_exit": {
+          "time_s": 10.58,
+          "steps": 3,
+          "text": "Le temps est beau aujujourd'hui."
+        },
+        "speedup": 4.18,
+        "step_reduction": 0.812
+      },
+      {
+        "prompt": "Translate to Spanish: I would like to order a coffee, please.",
+        "n_prompt_tokens": 39,
+        "baseline": {
+          "time_s": 46.1,
+          "steps": 16,
+          "text": "Me gustíaía pedar un cafée, por favor."
+        },
+        "entropy_exit": {
+          "time_s": 24.36,
+          "steps": 8,
+          "text": "Queríaía pedir un coffe, por favor."
+        },
+        "speedup": 1.89,
+        "step_reduction": 0.5
+      },
+      {
+        "prompt": "Translate to German: Where is the nearest train station?",
+        "n_prompt_tokens": 36,
+        "baseline": {
+          "time_s": 43.88,
+          "steps": 16,
+          "text": "Wo ist die nächste Bahnhof?"
+        },
+        "entropy_exit": {
+          "time_s": 16.23,
+          "steps": 5,
+          "text": "Woher ist die nächste Bahnhofslage?"
+        },
+        "speedup": 2.7,
+        "step_reduction": 0.688
+      },
+      {
+        "prompt": "Translate to Japanese: Thank you very much for your help.",
+        "n_prompt_tokens": 37,
+        "baseline": {
+          "time_s": 44.08,
+          "steps": 16,
+          "text": "おいえい。"
+        },
+        "entropy_exit": {
+          "time_s": 31.56,
+          "steps": 11,
+          "text": ""
+        },
+        "speedup": 1.4,
+        "step_reduction": 0.312
+      },
+      {
+        "prompt": "Translate to Italian: The book is on the table.",
+        "n_prompt_tokens": 36,
+        "baseline": {
+          "time_s": 44.44,
+          "steps": 16,
+          "text": "Il libro è sulla tella."
+        },
+        "entropy_exit": {
+          "time_s": 13.16,
+          "steps": 4,
+          "text": "Il libro è sulla tabella."
+        },
+        "speedup": 3.38,
+        "step_reduction": 0.75
+      }
+    ],
+    "summarization": [
+      {
+        "prompt": "Summarize in one sentence: Machine learning is a subset of artificial intelligence that focuses on building systems that learn from data. Instead of being explicitly programmed, these systems improve their performance through experience.",
+        "n_prompt_tokens": 63,
+        "baseline": {
+          "time_s": 52.96,
+          "steps": 16,
+          "text": "Machine learning is a branch of artificial intelligence that enables systems to learn from performance data rather than being explicit programming.."
+        },
+        "entropy_exit": {
+          "time_s": 31.19,
+          "steps": 9,
+          "text": "Machine learning is a type of artificial intelligence that allows systems to learn from data and improve performance over time."
+        },
+        "speedup": 1.7,
+        "step_reduction": 0.438
+      },
+      {
+        "prompt": "Summarize in one sentence: The Great Wall of China is a series of fortifications made of stone, brick, tamped earth, and other materials, built along the historical northern borders of China to protect against various nomadic groups.",
+        "n_prompt_tokens": 72,
+        "baseline": {
+          "time_s": 3.39,
+          "steps": null,
+          "text": ""
+        },
+        "entropy_exit": {
+          "time_s": 3.34,
+          "steps": null,
+          "text": ""
+        },
+        "speedup": 1.02,
+        "step_reduction": 0
+      },
+      {
+        "prompt": "Summarize in one sentence: Quantum computing uses quantum mechanical phenomena such as superposition and entanglement to perform computation. It promises exponential speedups for certain problems compared to classical computers.",
+        "n_prompt_tokens": 59,
+        "baseline": {
+          "time_s": 52.03,
+          "steps": 16,
+          "text": "Quantum computing leverages quantum mechanical phenomena like superposition and entanglement to perform computations, offering exponential speedupsups over classical problems."
+        },
+        "entropy_exit": {
+          "time_s": 36.06,
+          "steps": 11,
+          "text": "Quantum computing leverages quantum mechanical phenomena like superposition and entanglement to perform computations, solving solving problems exponentially faster than classical computers."
+        },
+        "speedup": 1.44,
+        "step_reduction": 0.312
+      }
+    ],
+    "code_simple": [
+      {
+        "prompt": "Write a Python function that checks if a number is prime.",
+        "n_prompt_tokens": 37,
+        "baseline": {
+          "time_s": 44.15,
+          "steps": 16,
+          "text": "Here's a code:\n\ndef is_prime(n):\n    if n <= 1:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True"
+        },
+        "entropy_exit": {
+          "time_s": 15.82,
+          "steps": 5,
+          "text": "def is_prime(n):\n    if n <= 1:\n        return False\n    if n == 2:\n        return True\n    for i in range(2, math.sqrt(n)+1):\n        if n % i == 0:\n            return False\n    return True"
+        },
+        "speedup": 2.79,
+        "step_reduction": 0.688
+      },
+      {
+        "prompt": "Write a Python function to reverse a string.",
+        "n_prompt_tokens": 34,
+        "baseline": {
+          "time_s": 43.57,
+          "steps": 16,
+          "text": "def reverse_string(s):\n    return s[::-1]"
+        },
+        "entropy_exit": {
+          "time_s": 19.03,
+          "steps": 6,
+          "text": "def reverse_string(s):\n    return s[::-1]"
+        },
+        "speedup": 2.29,
+        "step_reduction": 0.625
+      },
+      {
+        "prompt": "Write a Python function that calculates the factorial of a number.",
+        "n_prompt_tokens": 37,
+        "baseline": {
+          "time_s": 44.57,
+          "steps": 16,
+          "text": "Here's a Python function that calculates the factorial of a number:\n\n```\ndef factorial(n):\n    if n == 0:\n        return 1\n    else:\n        for i in range(1, n+1):\n            result *= i\n    return "
+        },
+        "entropy_exit": {
+          "time_s": 28.76,
+          "steps": 10,
+          "text": "Here's a Python function that calculates the factorial of a number:\n\n```python\ndef factorial(n):\n    \"\"\"Calculate the factorial of n\"\"\"\n    result = 1\n    for i in range(1, n + 1):\n        result *= i"
+        },
+        "speedup": 1.55,
+        "step_reduction": 0.375
+      }
+    ],
+    "code_complex": [
+      {
+        "prompt": "Write a Python function that implements binary search on a sorted list.",
+        "n_prompt_tokens": 38,
+        "baseline": {
+          "time_s": 46.17,
+          "steps": 16,
+          "text": "Here's a Python function that implements binary search on a sorted list:\n\n\n\nbinary_search(arr, target):\n\n```\n\n\n\nThis function takes a sorted list and a target value as input, and returns the index of "
+        },
+        "entropy_exit": {
+          "time_s": 45.21,
+          "steps": 16,
+          "text": "Here is bs(arr, x):\n\n\ndef bs(arr, x):\n\n\n   \n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n, return the index of the the x in the\n\n. If x is not found, return -1."
+        },
+        "speedup": 1.02,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "Write a Python class for a simple linked list with insert and delete methods.",
+        "n_prompt_tokens": 40,
+        "baseline": {
+          "time_s": 46.48,
+          "steps": 16,
+          "text": "class LinkedList:\n    def __init__(self):\n        self.head = None\n\n    def insert(self, data):\n        #\n        pass\n    \n    def display(self):\n        #\n        pass\n    \n    def delete(self, data"
+        },
+        "entropy_exit": {
+          "time_s": 42.81,
+          "steps": 15,
+          "text": "class LinkedList:\n    def __init__(self):\n        self.head = None\n\n    def insert(self, data):\n        # Insert data at the end of linked list\n        pass\n\n    def delete(self, data):\n        # Dele"
+        },
+        "speedup": 1.09,
+        "step_reduction": 0.062
+      },
+      {
+        "prompt": "Write a Python function that finds the longest common subsequence of two strings.",
+        "n_prompt_tokens": 39,
+        "baseline": {
+          "time_s": 46.29,
+          "steps": 16,
+          "text": "Here's a Python function that finds the longest common subsequence of two strings:\n\n```pythondef find_long_common_subsequence(s1, s2):\n    # = \"\"\n    # = \"\"1    \n    # = \"\"\n    \n    # = \"\"\n\n    return"
+        },
+        "entropy_exit": {
+          "time_s": 29.68,
+          "steps": 10,
+          "text": "Sure, I can help with that."
+        },
+        "speedup": 1.56,
+        "step_reduction": 0.375
+      }
+    ],
+    "creative_writing": [
+      {
+        "prompt": "Write a haiku about the ocean.",
+        "n_prompt_tokens": 33,
+        "baseline": {
+          "time_s": 44.47,
+          "steps": 16,
+          "text": "Ocean's vast embrace,\nWaves whisper softly,\nNature's timeless song."
+        },
+        "entropy_exit": {
+          "time_s": 44.57,
+          "steps": 16,
+          "text": "Ocean's vast embrace\nWaves kiss the shore\nNature's timeless song"
+        },
+        "speedup": 1.0,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "Write a short poem about artificial intelligence.",
+        "n_prompt_tokens": 33,
+        "baseline": {
+          "time_s": 44.0,
+          "steps": 16,
+          "text": "In the realm of code divine,\nA mind of human design.\n\nWith circuits and wires divine,\nIt learns and it shines.\n\n\n\nFrom data to decision divine,\nIt thinks and adapts.\n\n\n\n\nArtificial, yet divine,\nA marv"
+        },
+        "entropy_exit": {
+          "time_s": 44.4,
+          "steps": 16,
+          "text": "In the realm of circuits bright,\nWhere logic and code unite,\nA force of intelligence grows,\nArtificial,, it and divine.\n\n\nWith algorithms sharp and senses keen,\nIt learns and human serene,\nA marvel of"
+        },
+        "speedup": 0.99,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "Write a limerick about a programmer.",
+        "n_prompt_tokens": 34,
+        "baseline": {
+          "time_s": 44.53,
+          "steps": 16,
+          "text": "There once was a programmer so fine,\nWhose code was nothing and divine.\nHe'd write lines,\nAnd debug them fine,\nAnd his programs would always shine."
+        },
+        "entropy_exit": {
+          "time_s": 44.0,
+          "steps": 16,
+          "text": "There once was a programmer so bright,\nWhose code danced through the night.\nHe'd debug and test,\nWith logic so fine,\nAnd make everything work just right."
+        },
+        "speedup": 1.01,
+        "step_reduction": 0.0
+      }
+    ],
+    "math_reasoning": [
+      {
+        "prompt": "Solve step by step: If a train travels at 60 km/h for 2.5 hours, how far does it go?",
+        "n_prompt_tokens": 53,
+        "baseline": {
+          "time_s": 50.55,
+          "steps": 16,
+          "text": "To find the distance traveled by the train, we can multiply the speed and time. \n\nDistance = Speed x Time\n\nDistance = 60 km/h x 2.5 hours\n\nDistance = 150 km\n\nTherefore, the train travels 150 km."
+        },
+        "entropy_exit": {
+          "time_s": 30.43,
+          "steps": 9,
+          "text": "To find the distance traveled by the train, we can multiply the speed by the time:\n\nDistance = Speed × Time\n\nDistance = 60 km/h × 2.5 hours\n\nDistance = 150 km\n\nSo, the train travels 150 km."
+        },
+        "speedup": 1.66,
+        "step_reduction": 0.438
+      },
+      {
+        "prompt": "Solve: What is 15% of 240?",
+        "n_prompt_tokens": 39,
+        "baseline": {
+          "time_s": 44.99,
+          "steps": 16,
+          "text": "15% of 240 is 36."
+        },
+        "entropy_exit": {
+          "time_s": 21.23,
+          "steps": 7,
+          "text": "15% of5% of 240 is 36"
+        },
+        "speedup": 2.12,
+        "step_reduction": 0.562
+      },
+      {
+        "prompt": "Solve step by step: A rectangle has a perimeter of 30 cm and a width of 5 cm. What is its area?",
+        "n_prompt_tokens": 53,
+        "baseline": {
+          "time_s": 50.34,
+          "steps": 16,
+          "text": "The perimeter of a rectangle is given2*(length + width) = 30 cm. Therefore, length + 5 = 15 cm, so length = 10 cm. The area of the rectangle is length * width = 10 * 5 = 50 square centimeters."
+        },
+        "entropy_exit": {
+          "time_s": 41.47,
+          "steps": 13,
+          "text": "The perimeter of a rectangle is 2 * (length + width), so 30 = 2 * (length + 5). Solving for length, we find that length = 10 cm. The area = length * width = 10 * 5 = 50 square centimeters."
+        },
+        "speedup": 1.21,
+        "step_reduction": 0.188
+      }
+    ],
+    "classification": [
+      {
+        "prompt": "Classify the sentiment of this text as positive, negative, or neutral: I absolutely loved the movie, it was fantastic!",
+        "n_prompt_tokens": 50,
+        "baseline": {
+          "time_s": 50.7,
+          "steps": 16,
+          "text": "The sentiment of the text is positive. The use of words like \"absolutely loved\" and \"fantastic\" indicate a positive opinion towards the movie."
+        },
+        "entropy_exit": {
+          "time_s": 14.65,
+          "steps": 4,
+          "text": "The sentiment of the text is positive."
+        },
+        "speedup": 3.46,
+        "step_reduction": 0.75
+      },
+      {
+        "prompt": "Classify this text as spam or not spam: Congratulations! You've won a free iPhone! Click here to claim.",
+        "n_prompt_tokens": 49,
+        "baseline": {
+          "time_s": 50.23,
+          "steps": 16,
+          "text": "This text is likely spam."
+        },
+        "entropy_exit": {
+          "time_s": 23.46,
+          "steps": 7,
+          "text": "Spam."
+        },
+        "speedup": 2.14,
+        "step_reduction": 0.562
+      },
+      {
+        "prompt": "Extract all named entities from: Albert Einstein was born in Ulm, Germany in 1879 and later moved to Princeton, New Jersey.",
+        "n_prompt_tokens": 55,
+        "baseline": {
+          "time_s": 52.28,
+          "steps": 16,
+          "text": "Here are the named entities extracted from the text:\n\n1. Albert Einstein\n2. Ulm\n3. Germany\n4. Princeton, New Jersey"
+        },
+        "entropy_exit": {
+          "time_s": 17.98,
+          "steps": 5,
+          "text": "Here are the named entities extracted from the text:\n\n1. Albert Einstein Einstein\n2. Ulm, Germany\n3. Princeton, New Jersey"
+        },
+        "speedup": 2.91,
+        "step_reduction": 0.688
+      }
+    ],
+    "structured_output": [
+      {
+        "prompt": "List exactly 5 programming languages and their primary use case, one per line.",
+        "n_prompt_tokens": 41,
+        "baseline": {
+          "time_s": 46.7,
+          "steps": 16,
+          "text": "1. Python - Data development, machine learning, web development\n2. JavaScript - Web-end, back-end, web development\n3. Java - Enterprise applications, Android development, web applications\n4. C++ - Sys"
+        },
+        "entropy_exit": {
+          "time_s": 45.33,
+          "steps": 16,
+          "text": "Python. Primary use case: Web development and data analysis.\nJavaScript. Primary use case: Front-end development.\nJava. Primary use case: Enterprise applications and Android development.\nC++. Primary "
+        },
+        "speedup": 1.03,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "List the 4 seasons and one characteristic of each.",
+        "n_prompt_tokens": 36,
+        "baseline": {
+          "time_s": 45.1,
+          "steps": 16,
+          "text": "1. Spring: Flowers bloom to life, and temperatures warm up.\n2. Summer Summer: Warm temperatures, long days, and more activities.\n3. Autumn: Leaves change to fall, harvest, and cooler temperatures.\n44."
+        },
+        "entropy_exit": {
+          "time_s": 44.96,
+          "steps": 16,
+          "text": "1. Spring: Flowers bloom, warmer temperatures, and renewal weather.\n2. Summer: Warm weather, longer days, and peak tourist season.\n3. Autumn: Leaves fall, cooler temperatures, and harvest season.\n4.. "
+        },
+        "speedup": 1.0,
+        "step_reduction": 0.0
+      },
+      {
+        "prompt": "List 3 advantages and 3 disadvantages of remote work.",
+        "n_prompt_tokens": 37,
+        "baseline": {
+          "time_s": 45.86,
+          "steps": 16,
+          "text": "Advantages:\n1. Increased flexibility and autonomy\n2. Reduced commuting time and costs\n3. Ability to work from a more comfortable and productive environment\n\nDisadvantages:\n1. Potential for decreased p"
+        },
+        "entropy_exit": {
+          "time_s": 44.79,
+          "steps": 16,
+          "text": "Advantages: remote1. Increased flexibility and work-life balance 2. Reduced commuting time and costs 3. Potential for increased productivity and focus\n\nDisadvantages: 1. Lack of social interaction and"
+        },
+        "speedup": 1.02,
+        "step_reduction": 0.0
+      }
+    ],
+    "conversational": [
+      {
+        "prompt": "Hello, how are you today?",
+        "n_prompt_tokens": 32,
+        "baseline": {
+          "time_s": 41.7,
+          "steps": 16,
+          "text": "Hello! I'm doing well, thank you. How about you?"
+        },
+        "entropy_exit": {
+          "time_s": 22.08,
+          "steps": 8,
+          "text": "Hello! I'm doing well, thank you. How about you?"
+        },
+        "speedup": 1.89,
+        "step_reduction": 0.5
+      },
+      {
+        "prompt": "Can you recommend a good book to read?",
+        "n_prompt_tokens": 34,
+        "baseline": {
+          "time_s": 44.47,
+          "steps": 16,
+          "text": "Sure! What genre of book are you interested in?"
+        },
+        "entropy_exit": {
+          "time_s": 38.51,
+          "steps": 14,
+          "text": "Sure! What type of book are you interested in?"
+        },
+        "speedup": 1.15,
+        "step_reduction": 0.125
+      },
+      {
+        "prompt": "What should I cook for dinner tonight?",
+        "n_prompt_tokens": 33,
+        "baseline": {
+          "time_s": 43.55,
+          "steps": 16,
+          "text": "I'm happy to help! What you in for??"
+        },
+        "entropy_exit": {
+          "time_s": 43.33,
+          "steps": 16,
+          "text": "What you have and what you like?"
+        },
+        "speedup": 1.01,
+        "step_reduction": 0.0
+      }
+    ],
+    "instruction_following": [
+      {
+        "prompt": "Rewrite this sentence in passive voice: The cat chased the mouse.",
+        "n_prompt_tokens": 38,
+        "baseline": {
+          "time_s": 45.2,
+          "steps": 16,
+          "text": "The mouse was chased by the cat."
+        },
+        "entropy_exit": {
+          "time_s": 9.12,
+          "steps": 2,
+          "text": "The mouse was chased by the cat."
+        },
+        "speedup": 4.95,
+        "step_reduction": 0.875
+      },
+      {
+        "prompt": "Convert this to a question: The Earth revolves around the Sun.",
+        "n_prompt_tokens": 38,
+        "baseline": {
+          "time_s": 45.32,
+          "steps": 16,
+          "text": "Does the Earth revolve around the Sun?"
+        },
+        "entropy_exit": {
+          "time_s": 8.23,
+          "steps": 2,
+          "text": "Does the Earth revolve around the Sun?"
+        },
+        "speedup": 5.51,
+        "step_reduction": 0.875
+      },
+      {
+        "prompt": "Make this more formal: Hey, can you help me out with this stuff?",
+        "n_prompt_tokens": 41,
+        "baseline": {
+          "time_s": 45.56,
+          "steps": 16,
+          "text": "I would be pleased to assist you with this matter."
+        },
+        "entropy_exit": {
+          "time_s": 40.48,
+          "steps": 14,
+          "text": "Good day, could you provide assistance with this matter?"
+        },
+        "speedup": 1.13,
+        "step_reduction": 0.125
+      }
+    ]
+  }
+}
