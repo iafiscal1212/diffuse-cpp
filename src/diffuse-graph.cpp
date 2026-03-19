@@ -154,7 +154,7 @@ bool diffuse_forward(diffuse_context * ctx,
     size_t buf_size = per_layer * hp.n_layer;
     buf_size += (size_t)n_tokens * hp.n_vocab * sizeof(float) * 2;  // logits
     buf_size += 256ull * 1024 * 1024;  // graph nodes + execution plan overhead
-    buf_size = (size_t)(buf_size * 1.2);  // 20% safety margin
+    buf_size = (size_t)(buf_size * 1.5);  // 50% safety margin (handles 128+ tokens)
 
     struct ggml_init_params cparams = {
         /*.mem_size   = */ buf_size,
