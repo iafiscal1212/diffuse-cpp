@@ -19,6 +19,12 @@ from pathlib import Path
 import numpy as np
 
 try:
+    import torch
+except ImportError:
+    print("ERROR: torch not installed. Run: pip install torch", file=sys.stderr)
+    sys.exit(1)
+
+try:
     from safetensors import safe_open
 except ImportError:
     print("ERROR: safetensors not installed. Run: pip install safetensors", file=sys.stderr)
@@ -205,7 +211,7 @@ def convert(args):
         shard_name = os.path.basename(shard_path)
         print(f"\n── {shard_name} ──")
 
-        with safe_open(shard_path, framework="numpy") as f:
+        with safe_open(shard_path, framework="pt") as f:
             for name in sorted(f.keys()):
                 gguf_name = map_tensor_name(name)
                 if gguf_name is None:
@@ -213,21 +219,12 @@ def convert(args):
                     n_skipped += 1
                     continue
 
-                tensor = f.get_tensor(name)
-                orig_dtype = tensor.dtype
-                orig_shape = tensor.shape
+                pt_tensor = f.get_tensor(name)
+                orig_dtype_str = str(pt_tensor.dtype).replace("torch.", "")
+                orig_shape = tuple(pt_tensor.shape)
 
-                # Handle bfloat16 (numpy doesn't support it natively)
-                if orig_dtype == np.dtype("uint16"):
-                    # safetensors may return bf16 as uint16
-                    tensor = bf16_to_f32(tensor)
-                    orig_dtype_str = "bf16"
-                elif hasattr(orig_dtype, "name") and "bfloat" in orig_dtype.name:
-                    tensor = tensor.view(np.uint16).astype(np.uint32)
-                    tensor = (tensor << 16).view(np.float32)
-                    orig_dtype_str = "bf16"
-                else:
-                    orig_dtype_str = str(orig_dtype)
+                # Convert to float32 numpy (handles bf16 transparently)
+                tensor = pt_tensor.float().numpy()
 
                 # Convert to output type
                 if args.type == "f32":

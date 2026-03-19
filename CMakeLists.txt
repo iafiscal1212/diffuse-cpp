@@ -34,6 +34,9 @@ if(DIFFUSE_BUILD_TOOLS)
 
     add_executable(diffuse-bench tools/main-bench.cpp)
     target_link_libraries(diffuse-bench PRIVATE diffuse)
+
+    add_executable(dump-logits tools/dump-logits.cpp)
+    target_link_libraries(dump-logits PRIVATE diffuse)
 endif()
 
 # ── Tests ───────────────────────────────────────────────────────

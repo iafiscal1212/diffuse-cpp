@@ -42,7 +42,13 @@ struct ggml_cgraph * diffuse_build_graph(
 
         // Pre-attention RMSNorm
         cur = ggml_rms_norm(ctx, cur, hp.rms_norm_eps);
-        cur = ggml_mul(ctx, cur, layer.attn_norm);
+        {
+            struct ggml_tensor * norm_w = layer.attn_norm;
+            if (norm_w->type != GGML_TYPE_F32) {
+                norm_w = ggml_cast(ctx, norm_w, GGML_TYPE_F32);
+            }
+            cur = ggml_mul(ctx, cur, norm_w);
+        }
 
         // QKV projections
         struct ggml_tensor * Q = ggml_mul_mat(ctx, layer.wq, cur);
@@ -54,11 +60,11 @@ struct ggml_cgraph * diffuse_build_graph(
         K = ggml_reshape_3d(ctx, K, n_embd_head, n_head_kv, N);
         V = ggml_reshape_3d(ctx, V, n_embd_head, n_head_kv, N);
 
-        // RoPE on Q and K
+        // RoPE on Q and K (NEOX style = non-interleaved, like LLaDA/OLMo)
         Q = ggml_rope_ext(ctx, Q, inp_pos, nullptr, n_embd_head,
-                          0, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+                          GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
         K = ggml_rope_ext(ctx, K, inp_pos, nullptr, n_embd_head,
-                          0, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+                          GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
         // GQA: repeat K, V heads if n_head_kv < n_head
         if (n_head_kv < n_head) {
@@ -99,7 +105,13 @@ struct ggml_cgraph * diffuse_build_graph(
         // ── FFN (SwiGLU) ───────────────────────────────────────
         residual = cur;
         cur = ggml_rms_norm(ctx, cur, hp.rms_norm_eps);
-        cur = ggml_mul(ctx, cur, layer.ffn_norm);
+        {
+            struct ggml_tensor * norm_w = layer.ffn_norm;
+            if (norm_w->type != GGML_TYPE_F32) {
+                norm_w = ggml_cast(ctx, norm_w, GGML_TYPE_F32);
+            }
+            cur = ggml_mul(ctx, cur, norm_w);
+        }
 
         struct ggml_tensor * gate = ggml_mul_mat(ctx, layer.ffn_gate, cur);
         struct ggml_tensor * up   = ggml_mul_mat(ctx, layer.ffn_up,   cur);
@@ -112,7 +124,13 @@ struct ggml_cgraph * diffuse_build_graph(
 
     // ── Final norm + logits ────────────────────────────────────
     cur = ggml_rms_norm(ctx, cur, hp.rms_norm_eps);
-    cur = ggml_mul(ctx, cur, model.output_norm);
+    {
+        struct ggml_tensor * norm_w = model.output_norm;
+        if (norm_w->type != GGML_TYPE_F32) {
+            norm_w = ggml_cast(ctx, norm_w, GGML_TYPE_F32);
+        }
+        cur = ggml_mul(ctx, cur, norm_w);
+    }
     cur = ggml_mul_mat(ctx, model.output, cur);
     ggml_set_name(cur, "logits");
     ggml_set_output(cur);
