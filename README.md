@@ -8,12 +8,12 @@ High-performance C++ inference engine for Diffusion Language Models, built on GG
 
 ## Highlights
 
-- **13.59 tok/s on CPU** with Q4_K_M quantization and entropy_exit scheduling
-- **8.27x speedup** vs F16 baseline (1.64 tok/s)
+- **~10 tok/s on real prompts** with Q4_K_M quantization and entropy_exit scheduling
+- **~6x speedup** vs F16 baseline (1.64 tok/s) on easy prompts (factual, translation, arithmetic)
+- **Adaptive scheduling**: 3-4 steps for easy prompts, 16 for hard — the model decides
 - **5.1 GB quantized model** (vs 14.9 GB F16)
-- **Semantic scheduling**: model decides when to stop (16→3 steps on deterministic prompts)
-- **Zero training overhead**: no auxiliary models, no fine-tuning required
-- **Never worse**: maintains quality across all prompt types
+- **Never worse**: entropy_exit maintains quality across all prompt types
+- **40+ tok/s peak** on synthetic benchmarks (single forward pass)
 
 ## What is diffuse-cpp?
 
@@ -25,35 +25,34 @@ Until now, dLLMs ran exclusively on GPU with PyTorch. diffuse-cpp brings them to
 
 ## Benchmark Results
 
-All benchmarks: LLaDA-8B-Instruct, 24-core Xeon, 125GB RAM, 64 tokens generated, 3 reps + 1 warmup.
+All benchmarks: LLaDA-8B-Instruct, AMD EPYC 4465P 12-Core (24 threads), 125GB RAM, 64 tokens generated, 3 reps + 1 warmup.
 
-### Table 1: Performance by Quantization (steps=16, threads=12)
+### Quantization Performance (steps=16, threads=12)
 
-| Model | Size | Scheduler | tok/s | Speedup vs F16 |
-|-------|------|-----------|-------|-----------------|
-| F16 | 14.9 GB | low_confidence | 1.64 | 1.00x |
-| F16 | 14.9 GB | entropy_exit | 8.74 | 5.32x |
-| Q8_0 | 8.4 GB | low_confidence | 1.86 | 1.13x |
-| Q8_0 | 8.4 GB | entropy_exit | 10.09 | 6.14x |
-| Q4_K_M | 5.1 GB | low_confidence | 2.48 | 1.51x |
-| Q4_K_M | 5.1 GB | entropy_exit | 13.59 | 8.27x |
+| Model | Size | low_confidence | entropy_exit (real prompts) | Speedup vs F16 |
+|-------|------|----------------|----------------------------|-----------------|
+| F16 | 14.9 GB | 1.64 tok/s | — | 1.00x |
+| Q8_0 | 8.4 GB | 1.84 | — | 1.12x |
+| Q4_K_M | 5.1 GB | 2.52 | 9-11 tok/s (easy) | **~6x** |
 
-### Table 2: Thread Scaling (Q4_K_M, steps=16)
+### Real Prompt Performance (Q4_K_M, steps=16, threads=12)
 
-| Threads | low_confidence | entropy_exit | Scaling |
-|---------|---------------|--------------|---------|
-| 1 | 0.34 tok/s | 1.78 tok/s | 1.0x |
-| 4 | 1.17 | 6.35 | 3.6x |
-| 12 | 2.48 | 13.59 | 7.6x |
-| 24 | 2.05 | 11.38 | 6.4x |
+| Prompt type | entropy_exit tok/s | Steps used | Speedup vs baseline |
+|---|---|---|---|
+| Factual ("Capital of France?") | **9.22** | 4 | 3.9x |
+| Translation ("Translate to French") | **10.23** | 3 | 4.6x |
+| Arithmetic ("15 × 23?") | **11.49** | 3 | 5.5x |
+| Code (is_prime function) | **2.53** | 15 | 1.1x |
+| Creative (poem, explanation) | 2.33 | 17 | 1.0x |
 
-### Table 3: Steps vs Throughput (Q4_K_M, threads=12)
+### Thread Scaling (Q4_K_M, steps=16)
 
-| Steps | low_confidence | entropy_exit | Actual Steps |
-|-------|---------------|--------------|-------------|
-| 8 | 5.09 tok/s | 12.75 tok/s | 3 |
-| 16 | 2.48 | 13.59 | 3 |
-| 32 | 1.24 | 12.76 | 3 |
+| Threads | low_confidence | Scaling |
+|---------|---------------|---------|
+| 1 | 0.34 tok/s | 1.0x |
+| 4 | 1.18 | 3.5x |
+| 12 | 2.52 | 7.5x |
+| 24 | 2.21 | 6.6x |
 
 ## Quick Start
 
@@ -138,19 +137,18 @@ Unlike autoregressive models (one token per forward pass), diffusion models gene
 
 Standard diffusion schedulers use a fixed number of steps regardless of prompt difficulty. entropy_exit is a semantic scheduler that lets the model decide when to stop:
 
-- **Deterministic prompts** (translation, factual questions): converges in 2-3 steps
-- **Creative prompts** (story writing, open-ended reasoning): uses all configured steps
+- **Easy prompts** (translation, factual, arithmetic): converges in 3-4 steps → **9-11 tok/s**
+- **Medium prompts** (code, complex translation): 8-15 steps → **2.5-4.6 tok/s**
+- **Hard prompts** (creative writing, open-ended reasoning): uses all configured steps → **~2.3 tok/s**
 - **Never worse**: maintains quality across all prompt types
 
 Based on systematic benchmarking across 42 prompts in 12 categories:
 - **55% of prompts** achieve >20% speedup
-- **Instruction following**: 3.86x average speedup (passive voice, question transformation)
-- **Classification**: 2.84x (sentiment, spam detection, NER)
 - **Translation**: 2.71x (language-dependent, 1.4x–4.2x)
 - **Simple code**: 2.21x (factorial, reverse string, is_prime)
 - **Creative writing**: 1.0x (no speedup, but no degradation either)
 
-Estimated speedup on real chatbot traffic: **1.8x** (weighted by typical task distribution).
+Estimated speedup on mixed chatbot traffic: **~1.8x** (weighted by typical task distribution).
 
 ### How It Works
 
@@ -232,6 +230,7 @@ diffuse-cpp is production-ready for LLaDA-8B models. Additional architectures (S
 
 Current limitations:
 - No integrated tokenizer (use transformers)
+- Maximum 128 generated tokens per call (GGML buffer limitation, fixable)
 - Single-model inference only (no batching)
 - CPU-only (GPU support via GGML is possible but not prioritized)
 

@@ -4,11 +4,11 @@
 #
 # Usage: ./tools/run-benchmark.sh [--tokens TOKEN_IDS]
 #
-# Requires: models in /root/models/ (or $MODEL_DIR)
+# Requires: models in ./models/ (or $MODEL_DIR)
 
 set -e
 
-MODEL_DIR="${MODEL_DIR:-/root/models}"
+MODEL_DIR="${MODEL_DIR:-./models}"
 BENCH="./build/diffuse-bench"
 RESULTS_DIR="./research/benchmark"
 

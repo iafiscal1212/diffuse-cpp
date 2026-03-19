@@ -1,105 +1,174 @@
-## Table 1: Performance by Quantization (steps=16, threads=12)
+# Benchmark Results — diffuse-cpp v0.1.0
 
-| Model | Size (GB) | Scheduler | Time (ms) | tok/s | Steps | Speedup vs F16 |
+**System**: AMD EPYC 4465P 12-Core (24 threads), 125GB RAM, Ubuntu 24.04, GCC 13.3
+**Model**: LLaDA-8B-Instruct, 64 tokens generated, 32-token prompt
+**Protocol**: 3 reps + 1 warmup per config, exclusive CPU (no competing processes)
+**Date**: 2026-03-19, commit 054a80a (buffer 1.5x)
+
+---
+
+## Table 1: Synthetic Benchmark — Performance by Quantization (steps=16, threads=12)
+
+> **Note**: Synthetic benchmark uses a dummy prompt (all tokens=1). entropy_exit converges
+> in 1 step on this trivial input. See Table 5 for real-prompt performance.
+
+| Model | Size (GB) | Scheduler | Time (ms) | tok/s | Actual Steps | Speedup vs F16 |
 |---|---|---|---|---|---|---|
-| F16 | 14.9 | low_confidence | 38962 | 1.64 | 16 | 1.00x |
-| F16 | 14.9 | entropy_exit | 7333 | 8.74 | 3 | 5.32x |
-| Q8_0 | 8.4 | low_confidence | 34403 | 1.86 | 16 | 1.13x |
-| Q8_0 | 8.4 | entropy_exit | 6339 | 10.09 | 3 | 6.14x |
-| Q4_K_M | 5.1 | low_confidence | 25783 | 2.48 | 16 | 1.51x |
-| Q4_K_M | 5.1 | entropy_exit | 4709 | 13.59 | 3 | 8.27x |
+| F16 | 14.9 | low_confidence | 38935 | 1.64 | 16 | 1.00x |
+| F16 | 14.9 | entropy_exit | 2594 | 24.94 | 1 | 15.21x |
+| Q8_0 | 8.4 | low_confidence | 34910 | 1.84 | 16 | 1.12x |
+| Q8_0 | 8.4 | entropy_exit | 2120 | 30.19 | 1 | 18.41x |
+| Q4_K_M | 5.1 | low_confidence | 25374 | 2.52 | 16 | 1.54x |
+| Q4_K_M | 5.1 | entropy_exit | 1855 | 35.82 | 1 | 21.84x |
 
 ## Table 2: Thread Scaling (Q4_K_M, steps=16)
 
-| Threads | Scheduler | Time (ms) | tok/s | Scaling vs t=1 |
-|---|---|---|---|---|
-| 1 | low_confidence | 190740 | 0.34 | 1.0x |
-| 4 | low_confidence | 54465 | 1.17 | 3.5x |
-| 12 | low_confidence | 25783 | 2.48 | 7.4x |
-| 24 | low_confidence | 31327 | 2.05 | 6.1x |
-| 1 | entropy_exit | 36050 | 1.78 | 1.0x |
-| 4 | entropy_exit | 10082 | 6.35 | 3.6x |
-| 12 | entropy_exit | 4709 | 13.59 | 7.6x |
-| 24 | entropy_exit | 5631 | 11.38 | 6.4x |
+| Threads | low_confidence | entropy_exit | Scaling (LC) |
+|---|---|---|---|
+| 1 | 0.34 tok/s | 5.26 tok/s | 1.0x |
+| 4 | 1.18 | 19.05 | 3.5x |
+| 12 | 2.52 | 35.82 | 7.5x |
+| 24 | 2.21 | 32.92 | 6.6x |
+
+Optimal threads = physical cores (12). Hyperthreading (24) degrades performance.
 
 ## Table 3: Diffusion Steps vs Throughput (Q4_K_M, threads=12)
 
-| Steps | Scheduler | Time (ms) | tok/s | Actual Steps |
-|---|---|---|---|---|
-| 8 | low_confidence | 12579 | 5.09 | 8 |
-| 16 | low_confidence | 25783 | 2.48 | 16 |
-| 32 | low_confidence | 51724 | 1.24 | 32 |
-| 8 | entropy_exit | 5073 | 12.75 | 3 |
-| 16 | entropy_exit | 4709 | 13.59 | 3 |
-| 32 | entropy_exit | 5052 | 12.76 | 3 |
+| Configured Steps | low_confidence | entropy_exit | Actual Steps (EE) |
+|---|---|---|---|
+| 8 | 4.95 tok/s | 39.90 tok/s | 1 |
+| 16 | 2.52 | 35.82 | 1 |
+| 32 | 1.26 | 40.64 | 1 |
 
-## Table 4: Full Benchmark Matrix
+entropy_exit converges to 1 step on synthetic prompt regardless of configured steps.
+Configured steps act as an upper bound — real prompts use 3-17 steps (see Table 5).
+
+## Table 4: Per-Step Forward Pass Time (threads=12)
+
+This is the fundamental metric — time for one transformer forward pass.
+
+| Model | Size (GB) | Per-step (ms) | Derived from |
+|---|---|---|---|
+| F16 | 14.9 | 2433 | 38935ms / 16 steps |
+| Q8_0 | 8.4 | 2182 | 34910ms / 16 steps |
+| Q4_K_M | 5.1 | 1586 | 25374ms / 16 steps |
+
+Throughput at N steps = 64 tokens / (N × per-step time).
+
+## Table 5: Real Prompt Performance (Q4_K_M, steps=16, threads=12)
+
+End-to-end via generate.py (includes tokenizer load + process startup, ~500-1500ms overhead).
+
+| Prompt | low_confidence | entropy_exit | Steps (EE) | Speedup | Quality |
+|---|---|---|---|---|---|
+| "Capital of France?" | 2.38 tok/s | **9.22** | 4 | **3.9x** | Correct both |
+| "Translate to French" | 2.20 | **10.23** | 3 | **4.6x** | Correct both |
+| "Python is_prime()" | 2.25 | **2.53** | 15 | 1.1x | EE correct, LC empty |
+| "Short poem about ocean" | 2.34 | 2.33 | 17 | 1.0x | Both mediocre |
+| "Why is the sky blue?" | 2.12 | 2.21 | 17 | 1.0x | Both have artifacts |
+| "List the planets" | 2.33 | 2.33 | 17 | 1.0x | LC better |
+| "15 × 23 = ?" | 2.08 | **11.49** | 3 | **5.5x** | Correct both |
+| "Translate to Spanish" | 2.32 | **4.59** | 8 | **2.0x** | Both mediocre |
+
+**Pattern**: Easy prompts (factual, arithmetic, simple translation) converge in 3-4 steps.
+Hard prompts (creative, explanatory, long-form) use all 16-17 steps.
+
+### Real-Prompt Speedup vs F16 Baseline
+
+F16 baseline (s=16, t=12, low_confidence) = 1.64 tok/s
+
+| Scenario | Typical Steps | Q4_K_M EE tok/s | vs F16 baseline |
+|---|---|---|---|
+| Easy (factual, math, translation) | 3-4 | 9-11 | **~6x** |
+| Medium (code, complex translation) | 8-15 | 2.5-4.6 | **~2x** |
+| Hard (creative, explanatory) | 16-17 | 2.3 | **1.4x** |
+
+## Table 6: Full Benchmark Matrix (Synthetic)
 
 | Model | Steps | Threads | Scheduler | Time (ms) | tok/s |
 |---|---|---|---|---|---|
-| F16 | 8 | 4 | low_confidence | 36429 | 1.76 |
-| F16 | 8 | 12 | low_confidence | 19245 | 3.33 |
-| F16 | 8 | 24 | low_confidence | 22785 | 2.81 |
-| F16 | 16 | 4 | low_confidence | 73944 | 0.87 |
-| F16 | 16 | 12 | low_confidence | 38962 | 1.64 |
-| F16 | 16 | 24 | low_confidence | 45908 | 1.39 |
-| F16 | 32 | 4 | low_confidence | 147915 | 0.43 |
-| F16 | 32 | 12 | low_confidence | 78010 | 0.82 |
-| F16 | 32 | 24 | low_confidence | 87717 | 0.73 |
-| F16 | 8 | 4 | entropy_exit | 14326 | 4.47 |
-| F16 | 8 | 12 | entropy_exit | 7129 | 8.98 |
-| F16 | 8 | 24 | entropy_exit | 8120 | 7.92 |
-| F16 | 16 | 4 | entropy_exit | 14163 | 4.52 |
-| F16 | 16 | 12 | entropy_exit | 7333 | 8.74 |
-| F16 | 16 | 24 | entropy_exit | 8179 | 7.84 |
-| F16 | 32 | 4 | entropy_exit | 14169 | 4.52 |
-| F16 | 32 | 12 | entropy_exit | 7151 | 8.95 |
-| F16 | 32 | 24 | entropy_exit | 8577 | 7.50 |
-| Q8_0 | 8 | 4 | low_confidence | 37848 | 1.69 |
-| Q8_0 | 8 | 12 | low_confidence | 17222 | 3.72 |
-| Q8_0 | 8 | 24 | low_confidence | 17838 | 3.59 |
-| Q8_0 | 16 | 4 | low_confidence | 75679 | 0.85 |
-| Q8_0 | 16 | 12 | low_confidence | 34403 | 1.86 |
-| Q8_0 | 16 | 24 | low_confidence | 35613 | 1.80 |
-| Q8_0 | 32 | 4 | low_confidence | 151480 | 0.42 |
-| Q8_0 | 32 | 12 | low_confidence | 68103 | 0.94 |
-| Q8_0 | 32 | 24 | low_confidence | 72111 | 0.89 |
-| Q8_0 | 8 | 4 | entropy_exit | 14610 | 4.38 |
-| Q8_0 | 8 | 12 | entropy_exit | 6352 | 10.07 |
-| Q8_0 | 8 | 24 | entropy_exit | 6693 | 9.58 |
-| Q8_0 | 16 | 4 | entropy_exit | 14725 | 4.35 |
-| Q8_0 | 16 | 12 | entropy_exit | 6339 | 10.09 |
-| Q8_0 | 16 | 24 | entropy_exit | 6582 | 9.73 |
-| Q8_0 | 32 | 4 | entropy_exit | 14486 | 4.42 |
-| Q8_0 | 32 | 12 | entropy_exit | 6340 | 10.10 |
-| Q8_0 | 32 | 24 | entropy_exit | 6714 | 9.53 |
-| Q4_K_M | 8 | 1 | low_confidence | 96657 | 0.66 |
-| Q4_K_M | 8 | 4 | low_confidence | 26949 | 2.37 |
-| Q4_K_M | 8 | 12 | low_confidence | 12579 | 5.09 |
-| Q4_K_M | 8 | 24 | low_confidence | 15481 | 4.15 |
-| Q4_K_M | 16 | 1 | low_confidence | 190740 | 0.34 |
-| Q4_K_M | 16 | 4 | low_confidence | 54465 | 1.17 |
-| Q4_K_M | 16 | 12 | low_confidence | 25783 | 2.48 |
-| Q4_K_M | 16 | 24 | low_confidence | 31327 | 2.05 |
-| Q4_K_M | 32 | 1 | low_confidence | 379442 | 0.17 |
-| Q4_K_M | 32 | 4 | low_confidence | 108844 | 0.59 |
-| Q4_K_M | 32 | 12 | low_confidence | 51724 | 1.24 |
-| Q4_K_M | 32 | 24 | low_confidence | 61068 | 1.05 |
-| Q4_K_M | 8 | 1 | entropy_exit | 36164 | 1.77 |
-| Q4_K_M | 8 | 4 | entropy_exit | 9977 | 6.41 |
-| Q4_K_M | 8 | 12 | entropy_exit | 5073 | 12.75 |
-| Q4_K_M | 8 | 24 | entropy_exit | 5802 | 11.08 |
-| Q4_K_M | 16 | 1 | entropy_exit | 36050 | 1.78 |
-| Q4_K_M | 16 | 4 | entropy_exit | 10082 | 6.35 |
-| Q4_K_M | 16 | 12 | entropy_exit | 4709 | 13.59 |
-| Q4_K_M | 16 | 24 | entropy_exit | 5631 | 11.38 |
-| Q4_K_M | 32 | 1 | entropy_exit | 36088 | 1.77 |
-| Q4_K_M | 32 | 4 | entropy_exit | 10038 | 6.38 |
-| Q4_K_M | 32 | 12 | entropy_exit | 5052 | 12.76 |
-| Q4_K_M | 32 | 24 | entropy_exit | 5623 | 11.40 |
+| F16 | 8 | 1 | low_confidence | 126110 | 0.51 |
+| F16 | 8 | 4 | low_confidence | 36303 | 1.76 |
+| F16 | 8 | 12 | low_confidence | 19555 | 3.27 |
+| F16 | 8 | 24 | low_confidence | 22821 | 2.80 |
+| F16 | 16 | 1 | low_confidence | 251476 | 0.25 |
+| F16 | 16 | 4 | low_confidence | 73391 | 0.87 |
+| F16 | 16 | 12 | low_confidence | 38935 | 1.64 |
+| F16 | 16 | 24 | low_confidence | 43862 | 1.46 |
+| F16 | 32 | 1 | low_confidence | 499061 | 0.13 |
+| F16 | 32 | 4 | low_confidence | 146057 | 0.44 |
+| F16 | 32 | 12 | low_confidence | 76697 | 0.83 |
+| F16 | 32 | 24 | low_confidence | 87184 | 0.73 |
+| F16 | 8 | 1 | entropy_exit | 16336 | 3.92 |
+| F16 | 8 | 4 | entropy_exit | 4575 | 13.99 |
+| F16 | 8 | 12 | entropy_exit | 2639 | 24.25 |
+| F16 | 8 | 24 | entropy_exit | 2708 | 23.64 |
+| F16 | 16 | 1 | entropy_exit | 15972 | 4.01 |
+| F16 | 16 | 4 | entropy_exit | 4464 | 14.34 |
+| F16 | 16 | 12 | entropy_exit | 2594 | 24.94 |
+| F16 | 16 | 24 | entropy_exit | 2692 | 23.77 |
+| F16 | 32 | 1 | entropy_exit | 15921 | 4.02 |
+| F16 | 32 | 4 | entropy_exit | 4454 | 14.37 |
+| F16 | 32 | 12 | entropy_exit | 2386 | 26.82 |
+| F16 | 32 | 24 | entropy_exit | 2527 | 25.32 |
+| Q8_0 | 8 | 1 | low_confidence | 135207 | 0.47 |
+| Q8_0 | 8 | 4 | low_confidence | 37747 | 1.70 |
+| Q8_0 | 8 | 12 | low_confidence | 16974 | 3.77 |
+| Q8_0 | 8 | 24 | low_confidence | 18826 | 3.40 |
+| Q8_0 | 16 | 1 | low_confidence | 269926 | 0.24 |
+| Q8_0 | 16 | 4 | low_confidence | 75543 | 0.85 |
+| Q8_0 | 16 | 12 | low_confidence | 34910 | 1.84 |
+| Q8_0 | 16 | 24 | low_confidence | 34552 | 1.85 |
+| Q8_0 | 32 | 1 | low_confidence | 539810 | 0.12 |
+| Q8_0 | 32 | 4 | low_confidence | 151846 | 0.42 |
+| Q8_0 | 32 | 12 | low_confidence | 69624 | 0.92 |
+| Q8_0 | 32 | 24 | low_confidence | 72621 | 0.88 |
+| Q8_0 | 8 | 1 | entropy_exit | 17348 | 3.69 |
+| Q8_0 | 8 | 4 | entropy_exit | 4714 | 13.58 |
+| Q8_0 | 8 | 12 | entropy_exit | 2127 | 30.09 |
+| Q8_0 | 8 | 24 | entropy_exit | 2174 | 29.46 |
+| Q8_0 | 16 | 1 | entropy_exit | 17172 | 3.73 |
+| Q8_0 | 16 | 4 | entropy_exit | 4740 | 13.51 |
+| Q8_0 | 16 | 12 | entropy_exit | 2120 | 30.19 |
+| Q8_0 | 16 | 24 | entropy_exit | 2160 | 29.63 |
+| Q8_0 | 32 | 1 | entropy_exit | 17117 | 3.74 |
+| Q8_0 | 32 | 4 | entropy_exit | 4665 | 13.72 |
+| Q8_0 | 32 | 12 | entropy_exit | 2119 | 30.20 |
+| Q8_0 | 32 | 24 | entropy_exit | 2597 | 25.98 |
+| Q4_K_M | 8 | 1 | low_confidence | 95567 | 0.67 |
+| Q4_K_M | 8 | 4 | low_confidence | 26911 | 2.38 |
+| Q4_K_M | 8 | 12 | low_confidence | 12924 | 4.95 |
+| Q4_K_M | 8 | 24 | low_confidence | 15991 | 4.02 |
+| Q4_K_M | 16 | 1 | low_confidence | 190626 | 0.34 |
+| Q4_K_M | 16 | 4 | low_confidence | 54129 | 1.18 |
+| Q4_K_M | 16 | 12 | low_confidence | 25374 | 2.52 |
+| Q4_K_M | 16 | 24 | low_confidence | 28908 | 2.21 |
+| Q4_K_M | 32 | 1 | low_confidence | 378887 | 0.17 |
+| Q4_K_M | 32 | 4 | low_confidence | 109403 | 0.58 |
+| Q4_K_M | 32 | 12 | low_confidence | 50944 | 1.26 |
+| Q4_K_M | 32 | 24 | low_confidence | 62587 | 1.02 |
+| Q4_K_M | 8 | 1 | entropy_exit | 12499 | 5.12 |
+| Q4_K_M | 8 | 4 | entropy_exit | 3411 | 18.76 |
+| Q4_K_M | 8 | 12 | entropy_exit | 1605 | 39.90 |
+| Q4_K_M | 8 | 24 | entropy_exit | 1990 | 32.19 |
+| Q4_K_M | 16 | 1 | entropy_exit | 12171 | 5.26 |
+| Q4_K_M | 16 | 4 | entropy_exit | 3360 | 19.05 |
+| Q4_K_M | 16 | 12 | entropy_exit | 1855 | 35.82 |
+| Q4_K_M | 16 | 24 | entropy_exit | 1944 | 32.92 |
+| Q4_K_M | 32 | 1 | entropy_exit | 12092 | 5.29 |
+| Q4_K_M | 32 | 4 | entropy_exit | 3415 | 18.76 |
+| Q4_K_M | 32 | 12 | entropy_exit | 1575 | 40.64 |
+| Q4_K_M | 32 | 24 | entropy_exit | 1817 | 35.22 |
 
 ## Summary
 
-- **Best throughput**: 13.59 tok/s (Q4_K_M s=16 t=12 entropy_exit)
-- **F16 baseline** (s=16, t=12, low_confidence): 1.64 tok/s
-- **Best speedup vs F16 baseline**: 8.3x
+### Synthetic Benchmark (dummy prompt)
+- **Peak throughput**: 40.64 tok/s (Q4_K_M s=32 t=12 entropy_exit, 1 step)
+- **F16 baseline**: 1.64 tok/s (s=16, t=12, low_confidence)
+- **Thread scaling**: 7.5x from t=1 to t=12 (Q4_K_M)
+
+### Real Prompts (end-to-end via generate.py)
+- **Easy prompts**: 9-11 tok/s, 3-4 steps, **~6x vs F16 baseline**
+- **Hard prompts**: ~2.3 tok/s, 16-17 steps, **~1.4x vs F16** (quantization only)
+- **Never slower** than low_confidence on any prompt tested
+- **Weighted estimate** on mixed chatbot traffic: ~1.8x speedup

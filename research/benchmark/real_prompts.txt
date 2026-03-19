@@ -1,0 +1,138 @@
+============================================================
+REAL PROMPT TESTS — Thu Mar 19 08:20:43 PM UTC 2026
+Model: Q4_K_M, Steps: 16, Threads: 12
+============================================================
+
+=== Scheduler: low_confidence ===
+--- Prompt 1: What is the capital of France?
+  Output: The capital of France is Paris.
+  Time: 26854ms
+  Steps: 17
+  tok/s: 2.38
+
+--- Prompt 2: Translate to French: The weather is beautiful today
+  Output: Le temps est beau aujourd'hui.
+  Time: 28998ms
+  Steps: 17
+  tok/s: 2.20
+
+--- Prompt 3: Write a Python function to check if a number is prime
+  Output: ​
+  Time: 28415ms
+  Steps: 17
+  tok/s: 2.25
+
+--- Prompt 4: Write a short poem about the ocean
+  Output: The ocean is vast, deep, and blue,
+Its waves crash high, a majestic view.
+Its currents swirl, a dance of might,
+Its creatures roam, a worldrous sight.
+
+The ocean is vast, deep, and blue,
+Its waves crash high, a majestic view.
+  Time: 27310ms
+  Steps: 17
+  tok/s: 2.34
+
+--- Prompt 5: Explain why the sky is blue in two sentences
+  Output: The sky appears blue because sunlight, entering Earth's atmosphere, is scattered in all directions by the and and molecules present in the air. This scattering is more effective shorter wavelengths shorter wavelengths, such as blue,, which the blue light appear more visible to our eyes, in the the blue color of the sky.
+  Time: 30056ms
+  Steps: 17
+  tok/s: 2.12
+
+--- Prompt 6: List the planets in our solar system
+  Output: The planets in our solar system are Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and Neptune.
+  Time: 27410ms
+  Steps: 17
+  tok/s: 2.33
+
+--- Prompt 7: What is 15 multiplied by 23?
+  Output: 15 multiplied by 23 equals 345.
+  Time: 30647ms
+  Steps: 17
+  tok/s: 2.08
+
+--- Prompt 8: Translate to Spanish: I love programming
+  Output: Me amantaa programación.
+  Time: 27553ms
+  Steps: 17
+  tok/s: 2.32
+
+=== Scheduler: entropy_exit ===
+--- Prompt 1: What is the capital of France?
+  Output: The capital of France is Paris.
+  Time: 6941ms
+  Steps: 4
+  tok/s: 9.22
+
+--- Prompt 2: Translate to French: The weather is beautiful today
+  Output: Le temps est magnifique aujourd'hui.
+  Time: 6255ms
+  Steps: 3
+  tok/s: 10.23
+
+--- Prompt 3: Write a Python function to check if a number is prime
+  Output: def is_prime(n):
+    """
+
+    """
+    if n <= 1:
+        return False
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+  Time: 25204ms
+  Steps: 15
+  tok/s: 2.53
+
+--- Prompt 4: Write a short poem about the ocean
+  Output: The ocean's vast embrace,,
+A world beyond compare,,
+Its waves a gentle kiss,,
+A symphony of the bliss.
+
+
+Its depths a secrets hold,,
+A realm of endless light,,
+Its currents a gentle flow,,
+A dance of endless night.
+  Time: 27453ms
+  Steps: 17
+  tok/s: 2.33
+
+--- Prompt 5: Explain why the sky is blue in two sentences
+  Output: The sky appears blue because sunlight enters the Earth's atmosphere and and is scattered by molecules molecules and small particles in the air. This scattering is shorter wavelengths Rayleigh scattering, which affects blue light violet most. As. result, the blue result is light in all directions, creating the appearance of a blue sky.
+  Time: 28948ms
+  Steps: 17
+  tok/s: 2.21
+
+--- Prompt 6: List the planets in our solar system
+  Output: The planets in our solar system are:
+
+1. Mercury
+2. Venus
+3. Earth
+4. Mars
+5. Jupiter
+
+Additionally, there are dwarf dwarf planets, dwarf planets, and moons, but the International Astronomical Union no not longer between dwarf dwarf planets and dwarf planets.
+  Time: 27364ms
+  Steps: 17
+  tok/s: 2.33
+
+--- Prompt 7: What is 15 multiplied by 23?
+  Output: 15 multiplied by 23 equals 345.
+  Time: 5570ms
+  Steps: 3
+  tok/s: 11.49
+
+--- Prompt 8: Translate to Spanish: I love programming
+  Output: Me amo la programación.
+  Time: 13929ms
+  Steps: 8
+  tok/s: 4.59
+
+============================================================
+REAL PROMPT TESTS COMPLETE — Thu Mar 19 08:26:52 PM UTC 2026
+============================================================
