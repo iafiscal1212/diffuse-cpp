@@ -36,6 +36,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--schedule", default="cosine",
                         choices=["cosine", "linear"])
+    parser.add_argument("--remasking", default="low_confidence",
+                        choices=["low_confidence", "random", "entropy_exit"])
+    parser.add_argument("--entropy-threshold", type=float, default=1.5,
+                        help="Entropy threshold for entropy_exit scheduler")
     parser.add_argument("--system", default="You are a helpful assistant.",
                         help="System prompt")
     parser.add_argument("--raw", action="store_true",
@@ -92,6 +96,8 @@ def main():
         "--temp", str(args.temp),
         "--seed", str(args.seed),
         "--schedule", args.schedule,
+        "--remasking", args.remasking,
+        "--entropy-threshold", str(args.entropy_threshold),
     ]
 
     print(f"Running: {' '.join(cmd[:6])}...", file=sys.stderr)

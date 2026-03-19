@@ -17,7 +17,6 @@ static int tokens_to_unmask(int step, int total_steps, int total_masked,
         float cos0 = cosf(t0 * M_PI * 0.5f);
         float cos1 = cosf(t1 * M_PI * 0.5f);
         frac = (cos0 - cos1) / cos0;
-        // Fraction of remaining masked tokens to unmask this step
     } else {
         // Linear: equal fraction each step
         frac = 1.0f / (total_steps - step);
@@ -26,6 +25,32 @@ static int tokens_to_unmask(int step, int total_steps, int total_masked,
     int n = (int)roundf(frac * total_masked);
     if (n < 1 && total_masked > 0) n = 1;
     return std::min(n, total_masked);
+}
+
+// ── Compute entropy of logit distribution ─────────────────────
+static float compute_entropy(const float * logits, int n_vocab) {
+    // Find max for numerical stability
+    float max_val = logits[0];
+    for (int v = 1; v < n_vocab; v++) {
+        if (logits[v] > max_val) max_val = logits[v];
+    }
+
+    // Softmax + entropy in one pass
+    float sum_exp = 0.0f;
+    for (int v = 0; v < n_vocab; v++) {
+        sum_exp += expf(logits[v] - max_val);
+    }
+    float log_sum = logf(sum_exp);
+
+    float entropy = 0.0f;
+    for (int v = 0; v < n_vocab; v++) {
+        float log_p = (logits[v] - max_val) - log_sum;
+        float p = expf(log_p);
+        if (p > 1e-10f) {
+            entropy -= p * log_p;
+        }
+    }
+    return entropy;
 }
 
 // ── Iterative unmasking sampler ────────────────────────────────
@@ -59,7 +84,11 @@ std::vector<int32_t> diffuse_sample(
     // RNG for stochastic sampling
     std::mt19937 rng(params.seed);
 
-    DIFFUSE_LOG("diffusion: %d steps, %d tokens to generate", params.n_steps, n_generate);
+    DIFFUSE_LOG("diffusion: %d steps, %d tokens to generate, scheduler=%s",
+                params.n_steps, n_generate,
+                params.remasking == diffuse_remasking::ENTROPY_EXIT ? "entropy_exit" :
+                params.remasking == diffuse_remasking::LOW_CONFIDENCE ? "low_confidence" :
+                "random");
 
     for (int step = 0; step < params.n_steps && n_masked > 0; step++) {
         // Forward pass
@@ -67,11 +96,12 @@ std::vector<int32_t> diffuse_sample(
             DIFFUSE_DIE("forward pass failed at step %d", step);
         }
 
-        // For each masked position, compute candidate token and confidence
+        // For each masked position, compute candidate token, confidence, and entropy
         struct candidate {
             int pos;
             int token;
             float confidence;
+            float entropy;
         };
         std::vector<candidate> candidates;
         candidates.reserve(n_masked);
@@ -80,6 +110,7 @@ std::vector<int32_t> diffuse_sample(
             if (!is_masked[i]) continue;
 
             const float * logit_row = logits.data() + (size_t)i * n_vocab;
+            float ent = compute_entropy(logit_row, n_vocab);
 
             if (params.temperature <= 0.0f) {
                 // Argmax
@@ -91,9 +122,7 @@ std::vector<int32_t> diffuse_sample(
                         best = v;
                     }
                 }
-                // Confidence = softmax probability of best token (approximate)
-                // Use max logit - second max as a proxy for speed
-                candidates.push_back({i, best, best_val});
+                candidates.push_back({i, best, best_val, ent});
             } else {
                 // Temperature sampling
                 float max_logit = *std::max_element(logit_row, logit_row + n_vocab);
@@ -105,17 +134,34 @@ std::vector<int32_t> diffuse_sample(
                 }
                 for (int v = 0; v < n_vocab; v++) probs[v] /= sum;
 
-                // Sample from distribution
                 std::discrete_distribution<int> dist(probs.begin(), probs.end());
                 int sampled = dist(rng);
-                candidates.push_back({i, sampled, probs[sampled]});
+                candidates.push_back({i, sampled, probs[sampled], ent});
             }
         }
 
         // Determine how many tokens to unmask this step
         int n_unmask = tokens_to_unmask(step, params.n_steps, n_masked, params.schedule);
 
-        if (params.remasking == diffuse_remasking::LOW_CONFIDENCE) {
+        if (params.remasking == diffuse_remasking::ENTROPY_EXIT) {
+            // Entropy-exit: unmask all low-entropy tokens + scheduled amount
+            // Sort by entropy ascending (easiest first)
+            std::sort(candidates.begin(), candidates.end(),
+                      [](const candidate & a, const candidate & b) {
+                          return a.entropy < b.entropy;
+                      });
+
+            // Count tokens below entropy threshold
+            int n_easy = 0;
+            for (const auto & c : candidates) {
+                if (c.entropy < params.entropy_threshold) n_easy++;
+                else break;  // sorted, so no need to continue
+            }
+
+            // Unmask at least n_unmask, but also all easy tokens
+            n_unmask = std::max(n_unmask, n_easy);
+            n_unmask = std::min(n_unmask, (int)candidates.size());
+        } else if (params.remasking == diffuse_remasking::LOW_CONFIDENCE) {
             // Sort by confidence descending → unmask the most confident
             std::sort(candidates.begin(), candidates.end(),
                       [](const candidate & a, const candidate & b) {
@@ -127,15 +173,17 @@ std::vector<int32_t> diffuse_sample(
         }
 
         // Unmask top-n_unmask
+        int actually_unmasked = 0;
         for (int j = 0; j < n_unmask && j < (int)candidates.size(); j++) {
             int pos = candidates[j].pos;
             seq[pos] = candidates[j].token;
             is_masked[pos] = false;
             n_masked--;
+            actually_unmasked++;
         }
 
         DIFFUSE_LOG("  step %d/%d: unmasked %d tokens, %d remaining",
-                    step + 1, params.n_steps, n_unmask, n_masked);
+                    step + 1, params.n_steps, actually_unmasked, n_masked);
 
         if (callback) {
             callback(step + 1, params.n_steps, seq);

@@ -17,7 +17,8 @@ static void print_usage(const char * prog) {
     fprintf(stderr, "  --temp F    Temperature (default: 0 = argmax)\n");
     fprintf(stderr, "  --seed INT  Random seed (default: 42)\n");
     fprintf(stderr, "  --schedule  cosine|linear (default: cosine)\n");
-    fprintf(stderr, "  --remasking low_confidence|random (default: low_confidence)\n");
+    fprintf(stderr, "  --remasking low_confidence|random|entropy_exit (default: low_confidence)\n");
+    fprintf(stderr, "  --entropy-threshold F  Entropy threshold for entropy_exit (default: 1.5)\n");
     fprintf(stderr, "\nNote: Tokenization is currently external. Use --tokens to pass\n");
     fprintf(stderr, "      pre-tokenized input as comma-separated IDs.\n");
     fprintf(stderr, "  --tokens IDs  Comma-separated token IDs (bypasses prompt)\n");
@@ -42,6 +43,7 @@ int main(int argc, char ** argv) {
     int n_steps    = 32;
     int n_threads  = 4;
     float temperature = 0.0f;
+    float entropy_threshold = 1.5f;
     uint32_t seed  = 42;
     diffuse_schedule schedule = diffuse_schedule::COSINE;
     diffuse_remasking remasking = diffuse_remasking::LOW_CONFIDENCE;
@@ -66,9 +68,12 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "--schedule") == 0 && i + 1 < argc) {
             i++;
             if (strcmp(argv[i], "linear") == 0) schedule = diffuse_schedule::LINEAR;
+        } else if (strcmp(argv[i], "--entropy-threshold") == 0 && i + 1 < argc) {
+            entropy_threshold = atof(argv[++i]);
         } else if (strcmp(argv[i], "--remasking") == 0 && i + 1 < argc) {
             i++;
             if (strcmp(argv[i], "random") == 0) remasking = diffuse_remasking::RANDOM;
+            else if (strcmp(argv[i], "entropy_exit") == 0) remasking = diffuse_remasking::ENTROPY_EXIT;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -114,6 +119,7 @@ int main(int argc, char ** argv) {
     sparams.seed        = seed;
     sparams.schedule    = schedule;
     sparams.remasking   = remasking;
+    sparams.entropy_threshold = entropy_threshold;
 
     // Generate
     fprintf(stderr, "Generating %d tokens with %d diffusion steps...\n", n_generate, n_steps);

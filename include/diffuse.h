@@ -37,6 +37,7 @@ enum class diffuse_schedule {
 enum class diffuse_remasking {
     LOW_CONFIDENCE,
     RANDOM,
+    ENTROPY_EXIT,   // Unmask all low-entropy tokens early (semantic scheduling)
 };
 
 struct diffuse_sampler_params {
@@ -45,6 +46,7 @@ struct diffuse_sampler_params {
     diffuse_schedule   schedule   = diffuse_schedule::COSINE;
     diffuse_remasking  remasking  = diffuse_remasking::LOW_CONFIDENCE;
     uint32_t seed       = 42;
+    float    entropy_threshold = 1.5f;  // For ENTROPY_EXIT: unmask tokens below this
 };
 
 // ── Generation parameters ──────────────────────────────────────
