@@ -145,13 +145,16 @@ bool diffuse_forward(diffuse_context * ctx,
                      float * logits_out) {
     const auto & hp = ctx->model->hparams;
 
-    // Compute buffer: logits + per-layer intermediates + attention matrices + overhead
-    // Each layer needs: Q,K,V,attn_out (4×n_embd×N) + attn scores (N×N×n_head)
-    // Plus norm casts, SwiGLU intermediates, graph nodes overhead
-    size_t buf_size = 512ull * 1024 * 1024;  // base overhead for graph nodes + plan
-    buf_size += (size_t)n_tokens * hp.n_vocab * sizeof(float) * 2;  // logits + output matmul
-    buf_size += (size_t)n_tokens * hp.n_embd * 16 * sizeof(float);  // per-layer intermediates
-    buf_size += (size_t)n_tokens * (size_t)n_tokens * hp.n_head * sizeof(float) * 2;  // attn scores + softmax
+    // Compute buffer: all intermediate tensors for forward pass
+    // Per layer: ~10 embd-sized + 3 ff-sized + 2 attn-score matrices
+    size_t per_layer = (size_t)n_tokens * hp.n_embd * sizeof(float) * 10
+                     + (size_t)n_tokens * hp.n_ff   * sizeof(float) * 3
+                     + (size_t)n_tokens * n_tokens * hp.n_head * sizeof(float) * 2
+                     + hp.n_embd * sizeof(float) * 2;  // norm weight casts
+    size_t buf_size = per_layer * hp.n_layer;
+    buf_size += (size_t)n_tokens * hp.n_vocab * sizeof(float) * 2;  // logits
+    buf_size += 256ull * 1024 * 1024;  // graph nodes + execution plan overhead
+    buf_size = (size_t)(buf_size * 1.2);  // 20% safety margin
 
     struct ggml_init_params cparams = {
         /*.mem_size   = */ buf_size,
