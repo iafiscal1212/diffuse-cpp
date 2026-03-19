@@ -90,7 +90,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // TODO: integrate tokenizer; for now require --tokens
+    // Native tokenizer not integrated; use --tokens with pre-tokenized input
     if (input_tokens.empty()) {
         fprintf(stderr, "Warning: native tokenizer not yet integrated. "
                         "Use --tokens with pre-tokenized input.\n");
