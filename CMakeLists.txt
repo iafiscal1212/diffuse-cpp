@@ -37,6 +37,9 @@ if(DIFFUSE_BUILD_TOOLS)
 
     add_executable(dump-logits tools/dump-logits.cpp)
     target_link_libraries(dump-logits PRIVATE diffuse)
+
+    add_executable(diffuse-quantize tools/quantize.cpp)
+    target_link_libraries(diffuse-quantize PRIVATE ggml)
 endif()
 
 # ── Tests ───────────────────────────────────────────────────────
