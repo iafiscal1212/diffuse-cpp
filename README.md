@@ -8,12 +8,13 @@ High-performance C++ inference engine for Diffusion Language Models, built on GG
 
 ## Highlights
 
-- **~10 tok/s on real prompts** with Q4_K_M quantization and entropy_exit scheduling
-- **~6x speedup** vs F16 baseline (1.64 tok/s) on easy prompts (factual, translation, arithmetic)
+- **11–22 tok/s on easy real prompts** with Q4_K_M + entropy_exit + 256-token generation
+- **Up to 2.6x faster than llama.cpp** (8.51 tok/s) on the same hardware
+- **~6x speedup** vs F16 baseline on easy prompts (factual, translation, arithmetic)
+- **256-token generation** with 20% lower per-token cost vs 64-token batches
 - **Adaptive scheduling**: 3-4 steps for easy prompts, 16 for hard — the model decides
 - **5.1 GB quantized model** (vs 14.9 GB F16)
 - **Never worse**: entropy_exit maintains quality across all prompt types
-- **40+ tok/s peak** on synthetic benchmarks (single forward pass)
 
 ## What is diffuse-cpp?
 
@@ -25,25 +26,30 @@ Until now, dLLMs ran exclusively on GPU with PyTorch. diffuse-cpp brings them to
 
 ## Benchmark Results
 
-All benchmarks: LLaDA-8B-Instruct, AMD EPYC 4465P 12-Core (24 threads), 125GB RAM, 64 tokens generated, 3 reps + 1 warmup.
-
-### Quantization Performance (steps=16, threads=12)
-
-| Model | Size | low_confidence | entropy_exit (real prompts) | Speedup vs F16 |
-|-------|------|----------------|----------------------------|-----------------|
-| F16 | 14.9 GB | 1.64 tok/s | — | 1.00x |
-| Q8_0 | 8.4 GB | 1.84 | — | 1.12x |
-| Q4_K_M | 5.1 GB | 2.52 | 9-11 tok/s (easy) | **~6x** |
+All benchmarks: LLaDA-8B-Instruct, AMD EPYC 4465P 12-Core (24 threads), 125GB RAM, steps=16, 3 reps + 1 warmup.
 
 ### Real Prompt Performance (Q4_K_M, steps=16, threads=12)
 
-| Prompt type | entropy_exit tok/s | Steps used | Speedup vs baseline |
-|---|---|---|---|
-| Factual ("Capital of France?") | **9.22** | 4 | 3.9x |
-| Translation ("Translate to French") | **10.23** | 3 | 4.6x |
-| Arithmetic ("15 × 23?") | **11.49** | 3 | 5.5x |
-| Code (is_prime function) | **2.53** | 15 | 1.1x |
-| Creative (poem, explanation) | 2.33 | 17 | 1.0x |
+| Prompt | B=64 tok/s | B=256 tok/s | Steps | vs llama.cpp |
+|---|---|---|---|---|
+| Capital of France? | 9.22 | **15.60** | 4 | 1.8x |
+| Translate to French | 10.23 | **21.78** | 3 | 2.6x |
+| 15 × 23? | 11.49 | **11.45** | 5 | 1.3x |
+| Translate to Spanish | 4.59 | **7.17** | 8 | 0.8x |
+| Python is_prime() | 2.53 | **3.12** | 17 | 0.4x |
+| Poem about ocean | 2.33 | **3.10** | 17 | 0.4x |
+| Why is sky blue? | 2.21 | **3.18** | 17 | 0.4x |
+| List the planets | 2.33 | **3.19** | 17 | 0.4x |
+
+*B = generation buffer size. llama.cpp baseline: 8.51 tok/s (Llama-3-8B Q4_K_M, same hardware).*
+
+### Quantization Performance (steps=16, threads=12, B=64)
+
+| Model | Size | low_confidence | Speedup vs F16 |
+|-------|------|----------------|-----------------|
+| F16 | 14.9 GB | 1.64 tok/s | 1.00x |
+| Q8_0 | 8.4 GB | 1.84 | 1.12x |
+| Q4_K_M | 5.1 GB | 2.52 | **1.54x** |
 
 ### Thread Scaling (Q4_K_M, steps=16)
 
@@ -75,7 +81,7 @@ cmake --build build -j$(nproc)
 ./build/diffuse-cli \
     -m model.gguf \
     --tokens "128000,3923,374,279,6864,315,9822,30" \
-    -n 64 \
+    -n 256 \
     -s 16 \
     -t 12 \
     --remasking entropy_exit
@@ -137,9 +143,9 @@ Unlike autoregressive models (one token per forward pass), diffusion models gene
 
 Standard diffusion schedulers use a fixed number of steps regardless of prompt difficulty. entropy_exit is a semantic scheduler that lets the model decide when to stop:
 
-- **Easy prompts** (translation, factual, arithmetic): converges in 3-4 steps → **9-11 tok/s**
-- **Medium prompts** (code, complex translation): 8-15 steps → **2.5-4.6 tok/s**
-- **Hard prompts** (creative writing, open-ended reasoning): uses all configured steps → **~2.3 tok/s**
+- **Easy prompts** (translation, factual, arithmetic): converges in 3-4 steps → **11-22 tok/s** (B=256)
+- **Medium prompts** (code, complex translation): 8-15 steps → **3-7 tok/s** (B=256)
+- **Hard prompts** (creative writing, open-ended reasoning): uses all configured steps → **~3.1 tok/s** (B=256)
 - **Never worse**: maintains quality across all prompt types
 
 Based on systematic benchmarking across 42 prompts in 12 categories:
@@ -207,7 +213,7 @@ params.entropy_threshold = 1.5f;
 
 // Generate
 std::vector<int32_t> prompt_tokens = {128000, 3923, 374};
-auto output = diffuse_generate(ctx, prompt_tokens, 64, params);
+auto output = diffuse_generate(ctx, prompt_tokens, 256, params);
 
 // Cleanup
 diffuse_context_free(ctx);
@@ -230,7 +236,7 @@ diffuse-cpp is production-ready for LLaDA-8B models. Additional architectures (S
 
 Current limitations:
 - No integrated tokenizer (use transformers)
-- Maximum 128 generated tokens per call (GGML buffer limitation, fixable)
+- Default 256 generated tokens per call (configurable via -n flag)
 - Single-model inference only (no batching)
 - CPU-only (GPU support via GGML is possible but not prioritized)
 

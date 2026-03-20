@@ -1,7 +1,7 @@
 {
   "title": "diffuse-cpp: High-Performance CPU Inference Engine for Diffusion Language Models",
   "version": "1.0.0",
-  "description": "First C++ inference engine for diffusion language models, built on GGML. Achieves 17 tok/s with Q4_K_M quantization and entropy-based adaptive scheduling on a 12-core CPU — 2x faster than llama.cpp on equivalent hardware. Supports 256-token generation with 20% better cost per token vs short sequences.",
+  "description": "First C++ inference engine for diffusion language models, built on GGML. Achieves 11-22 tok/s on real prompts with Q4_K_M quantization and entropy-based adaptive scheduling on a 12-core CPU — up to 2.6x faster than llama.cpp on equivalent hardware. Supports 256-token generation with 20% better cost per token vs short sequences.",
   "upload_type": "software",
   "publication_date": "2026-03-20",
   "access_right": "open",
