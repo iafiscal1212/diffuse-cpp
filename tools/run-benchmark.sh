@@ -15,7 +15,7 @@ RESULTS_DIR="./research/benchmark"
 STEPS="8,16,32"
 THREADS="1,4,12,24"
 REPS=3
-N_GEN=64
+N_GEN=256
 WARMUP=1
 
 # Default tokens: pre-tokenized "What is the capital of France?" with chat template

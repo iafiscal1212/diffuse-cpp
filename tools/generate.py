@@ -25,8 +25,8 @@ def main():
     parser.add_argument("--cpp-bin", default="./build/diffuse-cli",
                         help="Path to diffuse-cli binary")
     parser.add_argument("-p", "--prompt", required=True, help="User prompt")
-    parser.add_argument("-n", "--n-generate", type=int, default=64,
-                        help="Tokens to generate (default: 64)")
+    parser.add_argument("-n", "--n-generate", type=int, default=256,
+                        help="Tokens to generate (default: 256)")
     parser.add_argument("-s", "--steps", type=int, default=32,
                         help="Diffusion steps (default: 32)")
     parser.add_argument("-t", "--threads", type=int, default=4,

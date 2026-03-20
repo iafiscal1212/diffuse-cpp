@@ -49,7 +49,7 @@ struct bench_result {
 int main(int argc, char ** argv) {
     std::string model_path;
     std::vector<int32_t> input_tokens;
-    int n_generate = 64;
+    int n_generate = 256;
     std::vector<int> steps_list = {8, 16, 32};
     std::vector<int> threads_list = {1, 4, 12};
     int n_reps = 3;
@@ -83,7 +83,7 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "Usage: %s -m MODEL [options]\n", argv[0]);
             fprintf(stderr, "  --tokens IDs   Pre-tokenized input (comma-separated)\n");
             fprintf(stderr, "  --prompt-len N Dummy prompt length if no --tokens (default: 32)\n");
-            fprintf(stderr, "  -n INT         Tokens to generate (default: 64)\n");
+            fprintf(stderr, "  -n INT         Tokens to generate (default: 256)\n");
             fprintf(stderr, "  -s LIST        Step counts (default: 8,16,32)\n");
             fprintf(stderr, "  -t LIST        Thread counts (default: 1,4,12)\n");
             fprintf(stderr, "  -r INT         Repetitions (default: 3)\n");
