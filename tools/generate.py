@@ -37,7 +37,8 @@ def main():
     parser.add_argument("--schedule", default="cosine",
                         choices=["cosine", "linear"])
     parser.add_argument("--remasking", default="low_confidence",
-                        choices=["low_confidence", "random", "entropy_exit"])
+                        choices=["low_confidence", "random", "entropy_exit",
+                                 "maskgit_plus", "topk_margin"])
     parser.add_argument("--entropy-threshold", type=float, default=1.5,
                         help="Entropy threshold for entropy_exit scheduler")
     parser.add_argument("--no-cache", action="store_true",

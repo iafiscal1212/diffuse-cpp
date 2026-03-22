@@ -21,9 +21,16 @@ High-performance C++ inference engine for Diffusion Language Models, built on GG
 
 diffuse-cpp is to Diffusion Language Models what llama.cpp is to autoregressive LLMs: a fast, portable, quantization-enabled inference engine.
 
-Diffusion LLMs (dLLMs) like LLaDA generate all tokens in parallel through an iterative refinement process, rather than sequentially left-to-right. This shifts inference from memory-bound to compute-bound, making aggressive quantization and SIMD optimizations highly effective on CPU.
+Diffusion LLMs (dLLMs) like LLaDA and Dream generate all tokens in parallel through an iterative refinement process, rather than sequentially left-to-right. This shifts inference from memory-bound to compute-bound, making aggressive quantization and SIMD optimizations highly effective on CPU.
 
 Until now, dLLMs ran exclusively on GPU with PyTorch. diffuse-cpp brings them to CPU with near-interactive performance.
+
+### Supported Models
+
+| Model | Backbone | Params | Attention | Converter |
+|-------|----------|--------|-----------|-----------|
+| [LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) | Llama | 8B | MHA (32/32) | `convert-llada.py` |
+| [Dream-v0-Instruct-7B](https://huggingface.co/Dream-org/Dream-v0-Instruct-7B) | Qwen2.5 | 7.6B | GQA (28/4) | `convert-dream.py` |
 
 ## Benchmark Results
 
@@ -103,9 +110,15 @@ print(",".join(map(str, tokens)))
 Convert a model from HuggingFace to GGUF F16:
 
 ```bash
+# LLaDA
 python tools/convert-llada.py \
     --input /path/to/LLaDA-8B-Instruct \
     --output llada-8b-f16.gguf
+
+# Dream
+python tools/convert-dream.py \
+    --input /path/to/Dream-v0-Instruct-7B \
+    --output dream-7b-f16.gguf
 ```
 
 Quantize to Q4_K_M (recommended for best performance):
@@ -118,9 +131,9 @@ Quantize to Q4_K_M (recommended for best performance):
 ```
 
 Available quantization formats:
-- `Q4_K_M`: 4-bit mixed precision (recommended, 5.1 GB)
-- `Q8_0`: 8-bit (8.4 GB, higher quality)
-- `F16`: 16-bit float (14.9 GB, reference quality)
+- `Q4_K_M`: 4-bit mixed precision (recommended, 5.1 GB for LLaDA, ~4.5 GB for Dream)
+- `Q8_0`: 8-bit (8.4 GB / ~7.6 GB)
+- `F16`: 16-bit float (14.9 GB / ~15.2 GB)
 
 ## Supported Models
 
@@ -256,7 +269,9 @@ See `include/diffuse.h` for full API documentation.
 
 ## Project Status
 
-diffuse-cpp is production-ready for LLaDA-8B models. Additional architectures (SEDD, MDLM) are planned.
+diffuse-cpp supports **LLaDA-8B** and **Dream-7B** models. Both use masked diffusion with bidirectional attention over a standard transformer backbone.
+
+Dream adds Grouped Query Attention (GQA) and additional remasking strategies (`maskgit_plus`, `topk_margin`) from the [Dream paper](https://arxiv.org/abs/2508.15487).
 
 Current limitations:
 - No integrated tokenizer (use transformers)
@@ -267,7 +282,7 @@ Current limitations:
 ## Contributing
 
 Contributions welcome. Areas of interest:
-- Additional model architectures (SEDD, MDLM)
+- Additional model architectures
 - Improved scheduling heuristics
 - Tokenizer integration
 - Multi-query batching

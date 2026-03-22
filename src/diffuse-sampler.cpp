@@ -98,11 +98,15 @@ std::vector<int32_t> diffuse_sample(
     const int cache_refresh = params.cache_refresh;
     const int cache_keep_active = params.cache_keep_active;
 
+    const char * remasking_name =
+        params.remasking == diffuse_remasking::ENTROPY_EXIT  ? "entropy_exit" :
+        params.remasking == diffuse_remasking::LOW_CONFIDENCE ? "low_confidence" :
+        params.remasking == diffuse_remasking::MASKGIT_PLUS  ? "maskgit_plus" :
+        params.remasking == diffuse_remasking::TOPK_MARGIN   ? "topk_margin" :
+        "random";
     DIFFUSE_LOG("diffusion: %d steps, %d tokens to generate, scheduler=%s, cache=%s, refresh=%d, keep_active=%d",
                 params.n_steps, n_generate,
-                params.remasking == diffuse_remasking::ENTROPY_EXIT ? "entropy_exit" :
-                params.remasking == diffuse_remasking::LOW_CONFIDENCE ? "low_confidence" :
-                "random",
+                remasking_name,
                 use_cache ? "ON" : "OFF",
                 cache_refresh, cache_keep_active);
 
@@ -226,15 +230,22 @@ std::vector<int32_t> diffuse_sample(
             float ent = compute_entropy(logit_row, n_vocab);
 
             if (params.temperature <= 0.0f) {
+                // Find top-1 (and top-2 for TOPK_MARGIN)
                 int best = 0;
                 float best_val = logit_row[0];
+                float second_val = -1e30f;
                 for (int v = 1; v < n_vocab; v++) {
                     if (logit_row[v] > best_val) {
+                        second_val = best_val;
                         best_val = logit_row[v];
                         best = v;
+                    } else if (logit_row[v] > second_val) {
+                        second_val = logit_row[v];
                     }
                 }
-                candidates.push_back({i, best, best_val, ent});
+                float conf = (params.remasking == diffuse_remasking::TOPK_MARGIN)
+                           ? (best_val - second_val) : best_val;
+                candidates.push_back({i, best, conf, ent});
             } else {
                 float max_logit = *std::max_element(logit_row, logit_row + n_vocab);
                 std::vector<float> probs(n_vocab);
@@ -272,10 +283,18 @@ std::vector<int32_t> diffuse_sample(
 
             n_unmask = std::max(n_unmask, n_easy);
             n_unmask = std::min(n_unmask, (int)candidates.size());
-        } else if (params.remasking == diffuse_remasking::LOW_CONFIDENCE) {
+        } else if (params.remasking == diffuse_remasking::LOW_CONFIDENCE ||
+                   params.remasking == diffuse_remasking::MASKGIT_PLUS) {
+            // Both sort by highest confidence (top-1 logit value)
             std::sort(candidates.begin(), candidates.end(),
                       [](const candidate & a, const candidate & b) {
                           return a.confidence > b.confidence;
+                      });
+        } else if (params.remasking == diffuse_remasking::TOPK_MARGIN) {
+            // Sort by margin between top-1 and top-2 logits (highest margin first)
+            std::sort(candidates.begin(), candidates.end(),
+                      [](const candidate & a, const candidate & b) {
+                          return a.confidence > b.confidence;  // margin stored in confidence field
                       });
         } else {
             std::shuffle(candidates.begin(), candidates.end(), rng);

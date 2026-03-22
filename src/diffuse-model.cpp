@@ -58,10 +58,25 @@ diffuse_model * diffuse_model_load_impl(const std::string & path, int n_threads)
     hp.rope_theta    = get_f32(gctx, "diffuse.rope.freq_base", 500000.0f);
     hp.rms_norm_eps  = get_f32(gctx, "diffuse.attention.layer_norm_rms_epsilon", 1e-5f);
 
-    DIFFUSE_LOG("  arch: LLaDA (Llama backbone)");
-    DIFFUSE_LOG("  n_vocab=%u, n_embd=%u, n_head=%u, n_layer=%u, n_ff=%u",
-                hp.n_vocab, hp.n_embd, hp.n_head, hp.n_layer, hp.n_ff);
-    DIFFUSE_LOG("  mask_token_id=%u, rope_theta=%.0f", hp.mask_token_id, hp.rope_theta);
+    // Read model type (llada, dream, etc.)
+    {
+        int64_t id = gguf_find_key(gctx, "diffuse.model_type");
+        if (id >= 0) {
+            model->model_type = gguf_get_val_str(gctx, id);
+        } else {
+            model->model_type = "llada";  // default for older GGUF files
+        }
+    }
+
+    const char * arch_name = "unknown";
+    if (model->model_type == "llada") arch_name = "LLaDA (Llama backbone)";
+    else if (model->model_type == "dream") arch_name = "Dream (Qwen2.5 backbone, GQA)";
+
+    DIFFUSE_LOG("  arch: %s", arch_name);
+    DIFFUSE_LOG("  n_vocab=%u, n_embd=%u, n_head=%u/%u(kv), n_layer=%u, n_ff=%u",
+                hp.n_vocab, hp.n_embd, hp.n_head, hp.n_head_kv, hp.n_layer, hp.n_ff);
+    DIFFUSE_LOG("  mask_token_id=%u, rope_theta=%.0f, rms_norm_eps=%.1e",
+                hp.mask_token_id, hp.rope_theta, hp.rms_norm_eps);
 
     // The weight context is the one that gguf_init populated
     model->ctx = meta_ctx;

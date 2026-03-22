@@ -17,7 +17,7 @@ static void print_usage(const char * prog) {
     fprintf(stderr, "  --temp F    Temperature (default: 0 = argmax)\n");
     fprintf(stderr, "  --seed INT  Random seed (default: 42)\n");
     fprintf(stderr, "  --schedule  cosine|linear (default: cosine)\n");
-    fprintf(stderr, "  --remasking low_confidence|random|entropy_exit (default: low_confidence)\n");
+    fprintf(stderr, "  --remasking low_confidence|random|entropy_exit|maskgit_plus|topk_margin (default: low_confidence)\n");
     fprintf(stderr, "  --entropy-threshold F  Entropy threshold for entropy_exit (default: 1.5)\n");
     fprintf(stderr, "  --cache-refresh INT   Force full forward every N steps (default: 0 = never)\n");
     fprintf(stderr, "  --cache-keep-active INT  Keep recently-changed positions active N extra steps (default: 0)\n");
@@ -79,6 +79,8 @@ int main(int argc, char ** argv) {
             i++;
             if (strcmp(argv[i], "random") == 0) remasking = diffuse_remasking::RANDOM;
             else if (strcmp(argv[i], "entropy_exit") == 0) remasking = diffuse_remasking::ENTROPY_EXIT;
+            else if (strcmp(argv[i], "maskgit_plus") == 0) remasking = diffuse_remasking::MASKGIT_PLUS;
+            else if (strcmp(argv[i], "topk_margin") == 0) remasking = diffuse_remasking::TOPK_MARGIN;
         } else if (strcmp(argv[i], "--no-cache") == 0) {
             use_cache = false;
         } else if (strcmp(argv[i], "--cache-refresh") == 0 && i + 1 < argc) {

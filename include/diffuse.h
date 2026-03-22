@@ -38,6 +38,8 @@ enum class diffuse_remasking {
     LOW_CONFIDENCE,
     RANDOM,
     ENTROPY_EXIT,   // Unmask all low-entropy tokens early (semantic scheduling)
+    MASKGIT_PLUS,   // Dream: unmask highest top-1 confidence (similar to LOW_CONFIDENCE)
+    TOPK_MARGIN,    // Dream: unmask by margin between top-1 and top-2 logits
 };
 
 struct diffuse_sampler_params {

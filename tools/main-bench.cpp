@@ -113,8 +113,10 @@ int main(int argc, char ** argv) {
     sched_config schedulers[] = {
         {"low_confidence", diffuse_remasking::LOW_CONFIDENCE},
         {"entropy_exit",   diffuse_remasking::ENTROPY_EXIT},
+        {"maskgit_plus",   diffuse_remasking::MASKGIT_PLUS},
+        {"topk_margin",    diffuse_remasking::TOPK_MARGIN},
     };
-    int n_schedulers = 2;
+    int n_schedulers = 4;
 
     // Load model
     int max_threads = *std::max_element(threads_list.begin(), threads_list.end());

@@ -46,6 +46,7 @@ struct diffuse_layer {
 // ── Full model struct ──────────────────────────────────────────
 struct diffuse_model {
     diffuse_hparams hparams;
+    std::string model_type;  // "llada", "dream", etc. (from GGUF metadata)
 
     // Embeddings
     struct ggml_tensor * tok_embd;    // token embeddings
