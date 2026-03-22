@@ -78,12 +78,20 @@ struct ggml_cgraph * diffuse_build_graph(
         K = ggml_rope_ext(ctx, K, inp_pos, nullptr, n_embd_head,
                           GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
-        // GQA: repeat K, V heads if n_head_kv < n_head
+        // GQA: repeat each KV head n_rep times (grouped, not interleaved)
+        // Reshape 3D→4D so ggml_repeat expands the right axis, then flatten back.
+        // K[d, n_kv, N] → K[d, 1, n_kv, N] → repeat → K[d, n_rep, n_kv, N] → K[d, n_head, N]
         if (n_head_kv < n_head) {
+            const int n_rep = n_head / n_head_kv;
+            K = ggml_reshape_4d(ctx, K, n_embd_head, 1, n_head_kv, N);
             K = ggml_repeat(ctx, K,
-                    ggml_new_tensor_3d(ctx, K->type, n_embd_head, n_head, N));
+                    ggml_new_tensor_4d(ctx, K->type, n_embd_head, n_rep, n_head_kv, N));
+            K = ggml_reshape_3d(ctx, K, n_embd_head, n_head, N);
+
+            V = ggml_reshape_4d(ctx, V, n_embd_head, 1, n_head_kv, N);
             V = ggml_repeat(ctx, V,
-                    ggml_new_tensor_3d(ctx, V->type, n_embd_head, n_head, N));
+                    ggml_new_tensor_4d(ctx, V->type, n_embd_head, n_rep, n_head_kv, N));
+            V = ggml_reshape_3d(ctx, V, n_embd_head, n_head, N);
         }
 
         // Permute Q, K: [n_embd_head, n_head, N] → [n_embd_head, N, n_head]
@@ -453,12 +461,18 @@ struct ggml_cgraph * diffuse_build_graph_cached(
         K_active = ggml_rope_ext(ctx, K_active, inp_pos, nullptr, n_embd_head,
                           GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
-        // GQA expansion
+        // GQA: repeat each KV head n_rep times (grouped, not interleaved)
         if (n_head_kv < n_head) {
+            const int n_rep = n_head / n_head_kv;
+            K_active = ggml_reshape_4d(ctx, K_active, n_embd_head, 1, n_head_kv, n_active);
             K_active = ggml_repeat(ctx, K_active,
-                    ggml_new_tensor_3d(ctx, K_active->type, n_embd_head, n_head, n_active));
+                    ggml_new_tensor_4d(ctx, K_active->type, n_embd_head, n_rep, n_head_kv, n_active));
+            K_active = ggml_reshape_3d(ctx, K_active, n_embd_head, n_head, n_active);
+
+            V_active = ggml_reshape_4d(ctx, V_active, n_embd_head, 1, n_head_kv, n_active);
             V_active = ggml_repeat(ctx, V_active,
-                    ggml_new_tensor_3d(ctx, V_active->type, n_embd_head, n_head, n_active));
+                    ggml_new_tensor_4d(ctx, V_active->type, n_embd_head, n_rep, n_head_kv, n_active));
+            V_active = ggml_reshape_3d(ctx, V_active, n_embd_head, n_head, n_active);
         }
 
         // ── Name K_active, V_active for extraction ──────────────
