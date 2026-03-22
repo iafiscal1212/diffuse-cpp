@@ -102,6 +102,11 @@ diffuse_model * diffuse_model_load_impl(const std::string & path, int n_threads)
         l.ffn_gate = get_tensor(meta_ctx, fmt_layer("blk.%d.ffn_gate.weight", i).c_str());
         l.ffn_up   = get_tensor(meta_ctx, fmt_layer("blk.%d.ffn_up.weight", i).c_str());
         l.ffn_down = get_tensor(meta_ctx, fmt_layer("blk.%d.ffn_down.weight", i).c_str());
+
+        // Optional QKV biases (Dream/Qwen2.5 has them, LLaDA does not)
+        l.bq = ggml_get_tensor(meta_ctx, fmt_layer("blk.%d.attn_q.bias", i).c_str());
+        l.bk = ggml_get_tensor(meta_ctx, fmt_layer("blk.%d.attn_k.bias", i).c_str());
+        l.bv = ggml_get_tensor(meta_ctx, fmt_layer("blk.%d.attn_v.bias", i).c_str());
     }
 
     DIFFUSE_LOG("model loaded: %lld tensors",

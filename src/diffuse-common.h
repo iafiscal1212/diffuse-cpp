@@ -36,6 +36,11 @@ struct diffuse_layer {
     struct ggml_tensor * wv;          // V projection
     struct ggml_tensor * wo;          // output projection
 
+    // QKV biases (optional, nullptr for models without them e.g. LLaDA)
+    struct ggml_tensor * bq = nullptr;  // Q bias (Dream/Qwen2.5)
+    struct ggml_tensor * bk = nullptr;  // K bias
+    struct ggml_tensor * bv = nullptr;  // V bias
+
     // FFN (SwiGLU)
     struct ggml_tensor * ffn_norm;    // RMSNorm weight
     struct ggml_tensor * ffn_gate;    // gate projection (w1)

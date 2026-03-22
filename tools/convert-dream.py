@@ -51,6 +51,9 @@ LAYER_TENSOR_MAP = {
     "self_attn.q_proj.weight":            "attn_q.weight",
     "self_attn.k_proj.weight":            "attn_k.weight",
     "self_attn.v_proj.weight":            "attn_v.weight",
+    "self_attn.q_proj.bias":              "attn_q.bias",
+    "self_attn.k_proj.bias":              "attn_k.bias",
+    "self_attn.v_proj.bias":              "attn_v.bias",
     "self_attn.o_proj.weight":            "attn_output.weight",
     "mlp.gate_proj.weight":               "ffn_gate.weight",   # SwiGLU gate (w1)
     "mlp.up_proj.weight":                 "ffn_up.weight",     # SwiGLU up (w3)
@@ -66,8 +69,11 @@ EXPECTED_SHAPES_7B = {
     "output.weight":            (152064, 3584),
     "blk.*.attn_norm.weight":   (3584,),
     "blk.*.attn_q.weight":      (3584, 3584),      # 28 heads * 128
+    "blk.*.attn_q.bias":        (3584,),
     "blk.*.attn_k.weight":      (512, 3584),        # 4 KV heads * 128
+    "blk.*.attn_k.bias":        (512,),
     "blk.*.attn_v.weight":      (512, 3584),        # 4 KV heads * 128
+    "blk.*.attn_v.bias":        (512,),
     "blk.*.attn_output.weight": (3584, 3584),
     "blk.*.ffn_norm.weight":    (3584,),
     "blk.*.ffn_gate.weight":    (18944, 3584),
@@ -249,7 +255,7 @@ def convert(args):
     print(f"Tensors skipped:   {n_skipped}")
     print(f"Total parameters:  {total_params:,} ({total_params/1e9:.2f}B)")
 
-    expected_tensors = 3 + n_layers * 9  # 3 global + 9 per layer
+    expected_tensors = 3 + n_layers * 12  # 3 global + 12 per layer (9 weights + 3 QKV biases)
     if not has_lm_head:
         expected_tensors -= 1  # No separate lm_head
     if n_converted != expected_tensors:
