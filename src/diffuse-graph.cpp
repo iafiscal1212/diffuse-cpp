@@ -1,5 +1,12 @@
 #include "diffuse-graph.h"
 
+// ── Helper: ensure tensor is F32 (for bias add after quantization) ──
+static struct ggml_tensor * ensure_f32(struct ggml_context * ctx, struct ggml_tensor * t) {
+    if (!t) return nullptr;
+    if (t->type != GGML_TYPE_F32) return ggml_cast(ctx, t, GGML_TYPE_F32);
+    return t;
+}
+
 // ── Build transformer forward graph ────────────────────────────
 struct ggml_cgraph * diffuse_build_graph(
         diffuse_context * dctx,
@@ -56,9 +63,9 @@ struct ggml_cgraph * diffuse_build_graph(
         struct ggml_tensor * V = ggml_mul_mat(ctx, layer.wv, cur);
 
         // Add QKV biases if present (Dream/Qwen2.5)
-        if (layer.bq) Q = ggml_add(ctx, Q, layer.bq);
-        if (layer.bk) K = ggml_add(ctx, K, layer.bk);
-        if (layer.bv) V = ggml_add(ctx, V, layer.bv);
+        if (layer.bq) Q = ggml_add(ctx, Q, ensure_f32(ctx, layer.bq));
+        if (layer.bk) K = ggml_add(ctx, K, ensure_f32(ctx, layer.bk));
+        if (layer.bv) V = ggml_add(ctx, V, ensure_f32(ctx, layer.bv));
 
         // Reshape for multi-head: [n_embd_head, n_head, N]
         Q = ggml_reshape_3d(ctx, Q, n_embd_head, n_head,    N);
@@ -199,9 +206,9 @@ static struct ggml_cgraph * diffuse_build_graph_extractable(
         struct ggml_tensor * V = ggml_mul_mat(ctx, layer.wv, cur);
 
         // Add QKV biases if present (Dream/Qwen2.5)
-        if (layer.bq) Q = ggml_add(ctx, Q, layer.bq);
-        if (layer.bk) K = ggml_add(ctx, K, layer.bk);
-        if (layer.bv) V = ggml_add(ctx, V, layer.bv);
+        if (layer.bq) Q = ggml_add(ctx, Q, ensure_f32(ctx, layer.bq));
+        if (layer.bk) K = ggml_add(ctx, K, ensure_f32(ctx, layer.bk));
+        if (layer.bv) V = ggml_add(ctx, V, ensure_f32(ctx, layer.bv));
 
         Q = ggml_reshape_3d(ctx, Q, n_embd_head, n_head,    N);
         K = ggml_reshape_3d(ctx, K, n_embd_head, n_head_kv, N);
@@ -431,9 +438,9 @@ struct ggml_cgraph * diffuse_build_graph_cached(
         struct ggml_tensor * V_active = ggml_mul_mat(ctx, layer.wv, cur);
 
         // Add QKV biases if present (Dream/Qwen2.5)
-        if (layer.bq) Q_active = ggml_add(ctx, Q_active, layer.bq);
-        if (layer.bk) K_active = ggml_add(ctx, K_active, layer.bk);
-        if (layer.bv) V_active = ggml_add(ctx, V_active, layer.bv);
+        if (layer.bq) Q_active = ggml_add(ctx, Q_active, ensure_f32(ctx, layer.bq));
+        if (layer.bk) K_active = ggml_add(ctx, K_active, ensure_f32(ctx, layer.bk));
+        if (layer.bv) V_active = ggml_add(ctx, V_active, ensure_f32(ctx, layer.bv));
 
         // Reshape: [n_embd, n_active] → [n_embd_head, n_head(_kv), n_active]
         Q_active = ggml_reshape_3d(ctx, Q_active, n_embd_head, n_head,    n_active);

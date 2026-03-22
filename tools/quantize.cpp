@@ -29,8 +29,9 @@ enum tensor_class {
 };
 
 static tensor_class classify_tensor(const char * name, int n_layers) {
-    // Norms are always kept in F32
+    // Norms and biases are always kept in F32
     if (strstr(name, "_norm") || strstr(name, "norm.")) return TC_NORM;
+    if (strstr(name, ".bias")) return TC_NORM;
 
     // Token embeddings
     if (strstr(name, "token_embd") || strstr(name, "embed")) return TC_EMBED;
