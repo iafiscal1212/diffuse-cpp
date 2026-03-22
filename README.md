@@ -8,13 +8,12 @@ High-performance C++ inference engine for Diffusion Language Models, built on GG
 
 ## Highlights
 
-- **15–28 tok/s on easy real prompts** with Q4_K_M + entropy_exit + inter-step cache + 256-token generation
-- **Up to 3.2x faster than llama.cpp** (8.51 tok/s) on the same hardware
-- **Inter-step KV cache**: 1.6x average speedup with no quality degradation
-- **6 of 8 real prompts outperform llama.cpp** (vs 3 of 8 without cache)
-- **~6x speedup** vs F16 baseline on easy prompts (factual, translation, arithmetic)
+- **Two models**: LLaDA-8B (Llama backbone) and Dream-7B (Qwen2.5 backbone, GQA)
+- **14–28 tok/s on easy prompts** with Q4_K_M + entropy_exit + inter-step cache
+- **Up to 3.3x faster than llama.cpp** (8.51 tok/s) on the same hardware
+- **Inter-step KV cache**: 1.6–1.8x average speedup with no quality degradation
 - **Adaptive scheduling**: 2-4 steps for easy prompts, 16 for hard — the model decides
-- **5.1 GB quantized model** (vs 14.9 GB F16)
+- **4.5–5.1 GB quantized models** (vs 14–15 GB F16)
 - **Never worse**: entropy_exit + cache maintains quality across all prompt types
 
 ## What is diffuse-cpp?
@@ -34,9 +33,31 @@ Until now, dLLMs ran exclusively on GPU with PyTorch. diffuse-cpp brings them to
 
 ## Benchmark Results
 
-All benchmarks: LLaDA-8B-Instruct, AMD EPYC 4465P 12-Core (24 threads), 125GB RAM, steps=16, 3 reps + 1 warmup.
+All benchmarks: AMD EPYC 4465P 12-Core, 125GB RAM, Q4_K_M, entropy_exit + inter-step cache, steps=16, threads=12.
 
-### Real Prompt Performance (Q4_K_M, entropy_exit, B=256, steps=16, threads=12)
+### Model Comparison (Q4_K_M, entropy_exit + cache)
+
+| # | Prompt | Dream-7B | Steps | LLaDA-8B | Steps | vs llama.cpp |
+|---|--------|----------|-------|----------|-------|-------------|
+| 1 | Capital of France? | **21.6** | 2 | 22.4 | 3 | 2.5x / 2.6x |
+| 2 | Translate to French | 14.3 | 6 | **25.7** | 2 | 1.7x / 3.0x |
+| 3 | 15 × 23? | **21.6** | 2 | 6.0 | 16 | 2.5x / 0.7x |
+| 4 | Translate to Spanish | 13.2 | 10 | **23.3** | 5 | 1.6x / 2.7x |
+| 5 | Python is_prime() | **8.2** | 7 | 4.5 | 15 | 1.0x / 0.5x |
+| 6 | Why sky blue? | 4.9 | 16 | **5.0** | 16 | 0.6x / 0.6x |
+| 7 | List planets | 4.9 | 16 | **9.5** | 16 | 0.6x / 1.1x |
+| 8 | Poem about ocean | 4.5 | 16 | **5.0** | 16 | 0.5x / 0.6x |
+| | **Average** | **11.6** | | **12.7** | | **1.4x / 1.5x** |
+
+*llama.cpp baseline: 8.51 tok/s (same hardware, Q4_K_M). Dream generates B=64, LLaDA generates B=256. "vs llama.cpp" shows Dream / LLaDA. Bold = faster model per prompt.*
+
+**Key observations:**
+- Dream excels at **factual and math** prompts (converges in 2 steps, 21.6 tok/s)
+- LLaDA excels at **translation** prompts (converges in 2-5 steps, 23-26 tok/s)
+- Both models struggle with **creative writing** (4.5-5.0 tok/s, requires all 16 steps)
+- **5 of 8 prompts** beat llama.cpp with Dream; **6 of 8** with LLaDA
+
+### LLaDA-8B Detailed Results (Q4_K_M, entropy_exit, B=256, steps=16, threads=12)
 
 | Prompt | No-Cache tok/s | Cache tok/s | Steps | vs llama.cpp |
 |---|---|---|---|---|
@@ -50,7 +71,7 @@ All benchmarks: LLaDA-8B-Instruct, AMD EPYC 4465P 12-Core (24 threads), 125GB RA
 | List the planets | 3.3 | **9.4** | 15 | 1.1x |
 | **Average** | **9.6** | **15.3** | | **1.8x** |
 
-*llama.cpp baseline: 8.51 tok/s (Llama-3-8B Q4_K_M, same hardware). Cache enabled by default. 6 of 8 prompts outperform llama.cpp; 2 (code generation, creative writing) remain slower due to requiring all 16 steps.*
+*Cache gives 1.6x average speedup (9.6 → 15.3 tok/s). 6 of 8 prompts outperform llama.cpp.*
 
 ### Quantization Performance (steps=16, threads=12, B=64)
 
@@ -137,11 +158,12 @@ Available quantization formats:
 
 ## Supported Models
 
-| Model | Architecture | Status |
-|-------|-------------|--------|
-| LLaDA-8B | Masked diffusion (Llama backbone) | Production |
-| SEDD | Score-based diffusion | Planned |
-| MDLM | Masked discrete diffusion | Planned |
+| Model | Architecture | GGUF Download | Status |
+|-------|-------------|---------------|--------|
+| [LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) | Llama, MHA (32/32) | [diffuse-cpp/LLaDA-8B-Instruct-GGUF](https://huggingface.co/diffuse-cpp/LLaDA-8B-Instruct-GGUF) | Production |
+| [Dream-v0-Instruct-7B](https://huggingface.co/Dream-org/Dream-v0-Instruct-7B) | Qwen2.5, GQA (28/4) | [diffuse-cpp/Dream-v0-Instruct-7B-GGUF](https://huggingface.co/diffuse-cpp/Dream-v0-Instruct-7B-GGUF) | Production |
+| SEDD | Score-based diffusion | — | Planned |
+| MDLM | Masked discrete diffusion | — | Planned |
 
 ## How It Works
 
@@ -269,9 +291,9 @@ See `include/diffuse.h` for full API documentation.
 
 ## Project Status
 
-diffuse-cpp supports **LLaDA-8B** and **Dream-7B** models. Both use masked diffusion with bidirectional attention over a standard transformer backbone.
+diffuse-cpp supports **LLaDA-8B** and **Dream-7B** models. Both use masked diffusion with bidirectional attention over a standard transformer backbone. Pre-quantized GGUF files are available on HuggingFace (see Supported Models above).
 
-Dream adds Grouped Query Attention (GQA) and additional remasking strategies (`maskgit_plus`, `topk_margin`) from the [Dream paper](https://arxiv.org/abs/2508.15487).
+Dream adds Grouped Query Attention (GQA), QKV biases, autoregressive logit shift, and additional remasking strategies (`maskgit_plus`, `topk_margin`).
 
 Current limitations:
 - No integrated tokenizer (use transformers)
