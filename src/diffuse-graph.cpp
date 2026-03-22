@@ -227,11 +227,18 @@ static struct ggml_cgraph * diffuse_build_graph_extractable(
         K = ggml_rope_ext(ctx, K, inp_pos, nullptr, n_embd_head,
                           GGML_ROPE_TYPE_NEOX, 0, hp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
+        // GQA: repeat each KV head n_rep times (grouped, not interleaved)
         if (n_head_kv < n_head) {
+            const int n_rep = n_head / n_head_kv;
+            K = ggml_reshape_4d(ctx, K, n_embd_head, 1, n_head_kv, N);
             K = ggml_repeat(ctx, K,
-                    ggml_new_tensor_3d(ctx, K->type, n_embd_head, n_head, N));
+                    ggml_new_tensor_4d(ctx, K->type, n_embd_head, n_rep, n_head_kv, N));
+            K = ggml_reshape_3d(ctx, K, n_embd_head, n_head, N);
+
+            V = ggml_reshape_4d(ctx, V, n_embd_head, 1, n_head_kv, N);
             V = ggml_repeat(ctx, V,
-                    ggml_new_tensor_3d(ctx, V->type, n_embd_head, n_head, N));
+                    ggml_new_tensor_4d(ctx, V->type, n_embd_head, n_rep, n_head_kv, N));
+            V = ggml_reshape_3d(ctx, V, n_embd_head, n_head, N);
         }
 
         // ── Name K,V for cache extraction (BEFORE permute) ──────
