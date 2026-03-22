@@ -68,6 +68,11 @@ std::vector<int32_t> diffuse_sample(
     const int mask_id = hp.mask_token_id;
     const int n_vocab = hp.n_vocab;
 
+    // Dream (Qwen2.5 backbone) uses shifted logits: output at position i
+    // predicts token at position i+1 (autoregressive convention).
+    // To get logits for position i, read from position max(i-1, 0).
+    const bool shift_logits = (ctx->model->model_type == "dream");
+
     // Build initial sequence: prompt + MASK tokens
     std::vector<int32_t> seq = prompt_tokens;
     int prompt_len = (int)prompt_tokens.size();
@@ -226,7 +231,9 @@ std::vector<int32_t> diffuse_sample(
         for (int i = 0; i < total_len; i++) {
             if (!is_masked[i]) continue;
 
-            const float * logit_row = logit_source + (size_t)i * n_vocab;
+            // Dream: shifted logits (position i uses logits from position max(i-1, 0))
+            int logit_pos = shift_logits ? std::max(i - 1, 0) : i;
+            const float * logit_row = logit_source + (size_t)logit_pos * n_vocab;
             float ent = compute_entropy(logit_row, n_vocab);
 
             if (params.temperature <= 0.0f) {
