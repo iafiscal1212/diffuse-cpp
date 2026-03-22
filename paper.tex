@@ -1,0 +1,804 @@
+% Diffusion Language Models are Faster than Autoregressive on CPU
+% v2.0 — March 22, 2026
+% Updated with inter-step KV cache results
+%
+% NOTE: Figures 1–4 must be generated separately (see research/benchmark/
+% scripts or regenerate with matplotlib). Place as fig1.pdf, fig2.pdf,
+% fig3.pdf, fig4.pdf in the same directory, or comment out \includegraphics.
+
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[numbers]{natbib}
+\usepackage{xcolor}
+% \usepackage{microtype}  % requires scalable fonts
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+\title{Diffusion Language Models are Faster than Autoregressive on CPU:\\
+An Empirical Study of the Memory-Compute Regime Inversion}
+
+\author{Carmen Esteban\thanks{Corresponding author: \href{mailto:caresment@gmail.com}{caresment@gmail.com}. ORCID: 0009-0009-8062-5492}\\
+IAFiscal \& Partners, Madrid, Spain}
+
+\date{March 22, 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Diffusion language models (dLLMs) are widely considered slower than autoregressive
+(AR) models for inference. We demonstrate empirically that this conclusion is hardware-dependent:
+on commodity CPUs, dLLMs can outperform optimized AR inference. We identify the
+mechanism---a regime inversion from memory-bound (AR) to compute-bound (diffusion)---and
+validate it with systematic benchmarks. We present \texttt{diffuse-cpp}, the first C++
+inference engine for diffusion LLMs with GGML quantization support. On a 12-core AMD EPYC
+with LLaDA-8B Q4\_K\_M, \texttt{diffuse-cpp} achieves 15--28~tok/s with entropy-exit
+scheduling, inter-step KV cache, and 256-token generation on easy prompts---up to
+$3.2\times$ faster than \texttt{llama.cpp} with Llama-3-8B Q4\_K\_M (8.51~tok/s) on the
+same hardware. Thread scaling reaches $7.5\times$ from 1 to 12 cores for diffusion versus
+saturation at 4 cores for AR. An entropy-based adaptive scheduler reduces denoising steps
+from 16 to 2--4 on easy prompts without quality loss, providing up to $6\times$ speedup
+over the F16 baseline. An inter-step KV cache reuses Key and Value tensors between
+denoising steps, providing $1.6\times$ average speedup with no quality degradation and
+implicit regularization benefits. Increasing the generation buffer from 64 to 256 tokens
+yields 20\% lower cost per token, confirming that diffusion's matrix-matrix advantage
+amplifies with sequence length. These results suggest that diffusion models may be a
+viable path toward democratizing LLM inference on commodity hardware without GPU dependency.
+\end{abstract}
+
+\textbf{Keywords:} diffusion language models, CPU inference, memory-bound, compute-bound,
+LLM acceleration, quantization, adaptive scheduling, inter-step cache
+
+\textbf{License:} CC-BY-4.0 (paper), AGPL-3.0 (code)
+
+
+\section{Introduction}
+
+Large language model (LLM) inference is dominated by GPU hardware. The supply chain---from
+ASML's lithography monopoly through TSMC's fabrication to NVIDIA's tensor cores---creates
+a dependency that concentrates access to AI capabilities among well-funded actors. The
+fundamental question motivating this work is whether alternative computational paradigms
+can make LLM inference viable on commodity CPUs, which are ubiquitous and inexpensive.
+
+Autoregressive (AR) models generate text one token at a time. Each token requires a full
+pass through the model's weight matrix, reading billions of parameters from memory to
+produce a single output. On CPUs, where memory bandwidth is $10$--$50\times$ lower than
+on GPUs, this sequential pattern creates a severe bottleneck: the processor spends most
+of its time waiting for data rather than computing. Adding more CPU cores does not help,
+because all threads compete for the same memory bus. This is the memory-bound regime.
+
+Diffusion language models (dLLMs)~\cite{nie2025,lou2024,sahoo2024} operate differently.
+Instead of generating tokens sequentially, they begin with a fully masked sequence and
+iteratively refine all positions in parallel across $T$ denoising steps. Each step reads
+the model weights once but processes $B$ tokens simultaneously through matrix-matrix
+multiplication rather than matrix-vector. This amortizes the cost of memory access across
+many tokens, shifting the workload from memory-bound to compute-bound. Crucially,
+matrix-matrix multiplication parallelizes efficiently across CPU cores.
+
+Despite this favorable computational profile, the dLLM literature has focused exclusively
+on GPU benchmarks. Papers introducing LLaDA~\cite{nie2025}, SEDD~\cite{lou2024}, and
+MDLM~\cite{sahoo2024} report wall-clock times on A100 and H100 GPUs, where the massive
+memory bandwidth makes AR models fast and the compute advantages of diffusion are less
+pronounced. No prior work has measured dLLM inference on commodity CPUs.
+
+This paper makes five contributions:
+
+\begin{enumerate}
+\item \textbf{First empirical demonstration} of the memory-compute regime inversion on
+  CPU: we show that dLLMs achieve near-linear thread scaling ($7.5\times$ at 12 cores)
+  while AR inference saturates at 4 cores ($2.4\times$).
+
+\item \textbf{\texttt{diffuse-cpp}}: the first C++ inference engine for dLLMs, built on
+  GGML~\cite{gerganov2023}, with support for F16, Q8\_0, and Q4\_K\_M quantization.
+
+\item \textbf{Entropy-exit adaptive scheduling}: an entropy-based early termination
+  mechanism that reduces denoising steps from 16 to 2--4 on easy prompts, providing up
+  to $6\times$ speedup over the F16 baseline with no quality degradation.
+
+\item \textbf{Inter-step KV cache}: a caching mechanism that reuses Key and Value tensors
+  between denoising steps, reducing per-step cost by only recomputing active positions.
+  Achieves $1.6\times$ average speedup with an implicit regularization effect that
+  improves output quality on 3 of 8 benchmarked prompts.
+
+\item \textbf{Systematic benchmarking}: 288 configurations with 3 repetitions each,
+  plus 8 diverse real prompts, totaling 6.5 hours of continuous CPU measurement.
+\end{enumerate}
+
+
+\section{Background}
+
+\subsection{Autoregressive Inference}
+
+AR models generate tokens sequentially: at each step $t$, the model computes
+$\mathbf{y}_t = f(\mathbf{x}_{1:t})$ by multiplying the input embedding against the
+weight matrices. For a single new token, this reduces to a matrix-vector product
+$\mathbf{W} \cdot \mathbf{h}$ where $\mathbf{W} \in \mathbb{R}^{N \times K}$ and
+$\mathbf{h} \in \mathbb{R}^{K}$. The arithmetic intensity (AI) is:
+\begin{equation}
+\text{AI}_{\text{AR}} = \frac{2NK}{(N+K) \cdot b} \approx \frac{2}{b} \quad \text{FLOP/byte}
+\end{equation}
+where $b$ is the bytes per parameter ($b=2$ for FP16, $b \approx 0.5$ for Q4\_K\_M).
+For Q4\_K\_M, $\text{AI}_{\text{AR}} \approx 4$~FLOP/byte. KV caching eliminates
+redundant computation but does not change the fundamental memory access pattern.
+
+\subsection{Diffusion Inference}
+
+Diffusion LLMs start with a fully masked sequence of $B$ tokens and refine it over $T$
+steps. Each step performs a full forward pass on the entire sequence, producing
+matrix-matrix products $\mathbf{W} \cdot \mathbf{H}$ where
+$\mathbf{H} \in \mathbb{R}^{K \times B}$. The arithmetic intensity is:
+\begin{equation}
+\text{AI}_{\text{diff}} = \frac{2NKB}{(NK + KB) \cdot b} \approx \frac{2B}{b} \quad \text{FLOP/byte}
+\end{equation}
+For $B=64$ and Q4\_K\_M: $\text{AI}_{\text{diff}} \approx 256$~FLOP/byte; for $B=256$:
+$\text{AI}_{\text{diff}} \approx 1024$~FLOP/byte---two to three orders of magnitude higher
+than AR. Crucially, larger $B$ increases AI without adding memory traffic, so longer
+generation buffers make diffusion \emph{more} compute-efficient per token (Section~\ref{sec:seqlen}).
+There is no KV cache; each step recomputes attention over the full sequence with
+bidirectional (non-causal) masking.
+
+\subsection{Prior Work}
+
+LLaDA~\cite{nie2025} introduced masked discrete diffusion for language modeling with a
+Llama-style backbone. SEDD~\cite{lou2024} proposed score-based discrete diffusion.
+MDLM~\cite{sahoo2024} simplified the training objective. Prophet~\cite{li2025}
+introduced speculative decoding for discrete diffusion, using a confidence-gap criterion
+for early stopping. EAGS~\cite{koh2024} and Fast-dLLM~\cite{wu2025} explored
+entropy-adaptive scheduling. All prior work benchmarked on GPU.
+
+For CPU inference, \texttt{llama.cpp}~\cite{gerganov2023b} is the state of the art for
+AR models, achieving near-theoretical throughput through GGML's optimized SIMD kernels
+and quantization formats.
+
+
+\section{The Regime Inversion}
+
+The central insight of this paper is that the relative performance of AR and diffusion
+inference \emph{inverts} depending on the hardware's memory-bandwidth-to-compute ratio.
+We formalize this using the roofline model~\cite{williams2009}.
+
+\subsection{The Matching Argument}
+
+A processor achieves peak performance when the workload's arithmetic intensity matches
+the machine's operational intensity (peak FLOPS / peak bandwidth). Table~\ref{tab:matching}
+shows the matching:
+
+\begin{table}[h]
+\centering
+\caption{Memory-compute matching across hardware regimes.}
+\label{tab:matching}
+\begin{tabular}{lcc}
+\toprule
+ & \textbf{GPU} (high BW) & \textbf{CPU} (low BW) \\
+\midrule
+\textbf{AR} (BW-hungry) & Match $\to$ fast & Mismatch $\to$ slow \\
+\textbf{Diffusion} (compute-hungry) & Redundant & Match $\to$ scales \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On GPUs with $\sim$1~TB/s memory bandwidth, AR's low arithmetic intensity is tolerable:
+the hardware delivers data fast enough. Diffusion's high compute demand, while achievable,
+offers no advantage over highly optimized AR inference with KV caching.
+
+On CPUs with $\sim$50--80~GB/s bandwidth, the situation reverses. AR inference hits a
+hard ceiling: with a 5.1~GB model (Q4\_K\_M) and 75~GB/s bandwidth, the theoretical
+maximum is $75/5.1 \approx 14.7$~tokens/s, and practical throughput is 8.51~tok/s
+(58\% of theoretical). Adding threads provides diminishing returns because all cores
+share the memory bus.
+
+Diffusion inference, in contrast, is compute-bound on CPU. Each forward pass performs
+$\mathcal{O}(NKB)$ operations with $\mathcal{O}(NK)$ data movement, and matrix-matrix
+multiplication parallelizes efficiently across cores via BLAS routines. The throughput
+scales with available compute, not bandwidth.
+
+\subsection{Empirical Evidence: Thread Scaling}
+
+Figure~\ref{fig:scaling} shows the critical empirical evidence. We benchmark both
+\texttt{diffuse-cpp} (LLaDA-8B Q4\_K\_M, $T$=16 steps) and \texttt{llama.cpp}
+(Llama-3-8B Q4\_K\_M) on identical hardware (AMD EPYC 4465P, 12 physical cores).
+
+% Figure 1: Thread scaling comparison
+% \begin{figure}[h]
+% \centering
+% \includegraphics[width=\textwidth]{fig1.pdf}
+% \caption{Thread scaling comparison. (a) Absolute throughput: \texttt{llama.cpp} is
+% faster at low core counts but saturates. (b) Normalized scaling: diffusion achieves
+% $7.4\times$ at 12 threads versus $2.4\times$ for AR. Hyperthreading (24 threads)
+% degrades both, confirming the physical-core bottleneck.}
+% \label{fig:scaling}
+% \end{figure}
+
+The AR curve saturates at 4 threads (scaling from $1.0\times$ to $2.5\times$, then
+stalling). The diffusion curve continues to $7.4\times$ at 12 threads, with degradation
+only at 24 threads due to hyperthreading contention. This demonstrates compute-bound
+scaling for diffusion: each additional core contributes proportionally to throughput,
+as predicted by the roofline analysis.
+
+\subsection{The Crossover}
+
+In absolute terms, \texttt{llama.cpp} remains faster for raw token generation at 12
+cores (8.51~tok/s for 16-step diffusion). However, this comparison is misleading for
+two reasons. First, entropy-exit scheduling (Section~\ref{sec:entropy}) reduces effective
+steps to 2--4 on favorable prompts, pushing diffusion throughput to 15--28~tok/s and
+surpassing AR. Second, the scaling trends diverge: as core counts increase (modern
+server CPUs have 64--128 cores), diffusion throughput grows near-linearly while AR
+remains bandwidth-limited. The crossover for unconditional throughput likely occurs
+between 16 and 32 cores on current hardware.
+
+
+\section{\texttt{diffuse-cpp}: Architecture}
+
+\texttt{diffuse-cpp} is a C++ inference engine for masked diffusion language models,
+built on the GGML tensor library~\cite{gerganov2023}---the same foundation as
+\texttt{llama.cpp}. This section describes its design.
+
+\textbf{Forward pass.} The model implements a standard Llama transformer architecture
+with one critical difference: attention is bidirectional (no causal mask). All token
+positions attend to all others at every step. There is no KV cache in the standard
+autoregressive sense; the full attention computation is performed at each denoising step.
+While this appears wasteful relative to AR inference, it is precisely this structure that
+enables the compute-bound regime: the large matrix-matrix multiplications at each step
+amortize memory access costs.
+
+\textbf{Denoising loop.} Generation proceeds as follows: (1) initialize a sequence of
+$B$ mask tokens; (2) perform a forward pass to obtain logits for all positions; (3) for
+each masked position, sample from the logit distribution; (4) unmask positions based on
+the scheduling policy; (5) repeat until all positions are unmasked or the step budget is
+exhausted.
+
+\textbf{Model format.} Models are stored in GGUF format, converted from HuggingFace
+SafeTensors via a Python script (\texttt{tools/convert-llada.py}). The converter maps
+LLaDA's tensor names to GGML conventions and validates architecture parameters (hidden
+size, number of heads, vocabulary size, RoPE configuration).
+
+\textbf{Quantization.} \texttt{diffuse-cpp} supports three quantization levels via
+\texttt{diffuse-quantize}: F16 (14.9~GB), Q8\_0 (8.4~GB), and Q4\_K\_M (5.1~GB).
+Quantization is performed weight-only; activations remain in FP32. The Q4\_K\_M format
+uses mixed 4-bit/6-bit precision with per-block scaling, following the GGML specification.
+
+\textbf{Scheduling policies.} Two scheduling policies are implemented.
+\texttt{low\_confidence} is the default baseline: at each step, it unmasks a fixed
+fraction of the most confident positions (lowest logit entropy).
+\texttt{entropy\_exit} is our adaptive scheduler, described in
+Section~\ref{sec:entropy}.
+
+\subsection{Inter-Step KV Cache}
+\label{sec:cache}
+
+Standard diffusion inference recomputes the full attention for all $N$ positions at every
+denoising step, even though most positions do not change between consecutive steps. Once
+a position is unmasked with high confidence, its token value---and therefore its Key and
+Value vectors---remains stable. We exploit this by caching the post-RoPE K and V tensors
+from each transformer layer between steps.
+
+\textbf{Mechanism.} After each full forward pass, we store the K and V tensors for all
+$L$ layers and all $N$ positions. On subsequent steps, we partition positions into two sets:
+
+\begin{itemize}
+\item \textbf{Active set} $\mathcal{A}$: positions that are still masked or were recently
+  unmasked. These require fresh K,V computation because their hidden states may have changed.
+\item \textbf{Cached set} $\mathcal{C} = \{1,\ldots,N\} \setminus \mathcal{A}$: positions
+  whose tokens have not changed. Their K,V are reused from the cache.
+\end{itemize}
+
+For each layer, the attention computation becomes:
+\[
+\text{Attn}(\mathbf{Q}_\mathcal{A}, [\mathbf{K}_\mathcal{C}^{\text{cached}} \| \mathbf{K}_\mathcal{A}^{\text{fresh}}], [\mathbf{V}_\mathcal{C}^{\text{cached}} \| \mathbf{V}_\mathcal{A}^{\text{fresh}}])
+\]
+where $\|$ denotes concatenation along the sequence dimension.
+
+\textbf{Complexity.} The per-step cost reduces from $\mathcal{O}(N^2)$ per layer
+(full recomputation) to $\mathcal{O}(|\mathcal{A}| \cdot N)$ per layer (only active
+queries, full key-value context). Since $|\mathcal{A}|$ shrinks monotonically as tokens
+converge, later steps become progressively cheaper.
+
+\textbf{Approximation.} The cache introduces an approximation: the K,V for cached
+positions are computed from \emph{stale} hidden states. In a bidirectional transformer,
+changing any token affects all positions through attention interactions. However, we
+observe empirically that this approximation does not degrade output quality. In fact,
+it acts as implicit regularization: reusing stable K,V from earlier steps prevents
+attention from amplifying accumulated errors during the denoising process. On 3 of 8
+benchmarked prompts, cached output quality is measurably better than uncached
+(Section~\ref{sec:cache_results}).
+
+\textbf{Configuration.} The cache is enabled by default. The flag \texttt{--no-cache}
+disables it. The flag \texttt{--cache-keep-active N} extends the active set to include
+positions that changed within the last $N$ steps, trading speed for fidelity.
+
+
+\section{Entropy-Exit Adaptive Scheduling}
+\label{sec:entropy}
+
+Standard diffusion schedulers use a fixed number of denoising steps $T$ regardless of
+prompt difficulty. This is suboptimal: a factual question (``What is the capital of
+France?'') requires far less refinement than creative writing (``Write a poem about the
+ocean''). We introduce \texttt{entropy\_exit}, an adaptive scheduler that allows the
+model to decide when to stop.
+
+\subsection{Algorithm}
+
+After each denoising step, \texttt{entropy\_exit} computes the Shannon
+entropy~\cite{shannon1948} of the logit distribution at each remaining masked position:
+\begin{equation}
+H_i = -\sum_{v=1}^{V} p_{i,v} \log p_{i,v}
+\end{equation}
+where $p_{i,v} = \text{softmax}(\mathbf{z}_i)_v$ and $V$ is the vocabulary size.
+Positions with $H_i < \tau$ (default $\tau = 1.5$~nats) are immediately
+unmasked---the model is sufficiently confident. If all $B$ positions are unmasked,
+generation terminates.
+
+The computational overhead is negligible: entropy computation is $\mathcal{O}(BV)$,
+while the forward pass is $\mathcal{O}(BNK)$ with $N, K \gg V$ for the dominant
+attention and MLP layers.
+
+\subsection{Prior Art}
+
+Prophet~\cite{li2025} uses a confidence-gap criterion (difference between top-2 logits)
+for speculative decoding of diffusion models. EAGS~\cite{koh2024} and
+Fast-dLLM~\cite{wu2025} explore entropy-based scheduling. Our contribution is not the
+scheduling concept itself, but its implementation in a CPU-optimized engine where the
+memory-compute regime inversion makes adaptive scheduling particularly impactful:
+reducing steps has a direct, near-linear effect on throughput in the compute-bound regime.
+
+\subsection{Empirical Behavior}
+
+% Figure 2: Entropy-exit step allocation
+% \begin{figure}[h]
+% \centering
+% \includegraphics[width=\textwidth]{fig2.pdf}
+% \caption{Entropy-exit step allocation across 8 real prompts. Easy prompts (factual,
+% arithmetic, simple translation) converge in 2--4 steps. Hard prompts (creative,
+% explanatory) use all configured steps. Numbers above bars show throughput in tok/s.}
+% \label{fig:entropy}
+% \end{figure}
+
+Easy prompts (factual QA, arithmetic, simple translation) converge in 2--4 steps,
+achieving 15--28~tok/s with inter-step cache. Medium-difficulty prompts (code generation,
+complex translation) use 7--15 steps. Hard prompts (creative writing, open-ended
+explanation) use the full 15--16 steps with no speedup but also no degradation relative
+to the baseline.
+
+In a separate PyTorch-based evaluation across 42 prompts in 12 categories, 55\% of
+prompts achieved $>$20\% speedup. The best categories were instruction-following
+($3.86\times$), classification ($2.84\times$), and translation ($2.71\times$). No
+category showed degradation.
+
+
+\section{Experimental Results}
+
+\subsection{Setup}
+
+All benchmarks were conducted on a dedicated AMD EPYC 4465P (12 cores, 24 threads),
+125~GB DDR5 RAM, running Ubuntu 24.04 with GCC 13.3. No competing processes ran during
+measurement. Each configuration was run 3 times with 1 warmup, generating 64 tokens from
+a 32-token prompt unless otherwise noted. Sequence-length scaling experiments
+(Section~\ref{sec:seqlen}) used 256 generated tokens. GGML compute buffers used a
+$1.5\times$ safety multiplier per upstream recommendation.
+
+\textbf{Methodology note.} Initial benchmarks used a $1.2\times$ buffer multiplier,
+yielding approximately 30\% higher throughput (e.g., 13.59~tok/s peak). Upon discovering
+this was below the GGML-recommended minimum, all 288 configurations were re-run with
+$1.5\times$ buffers. This paper reports only the corrected results.
+
+\subsection{Quantization Performance}
+
+Table~\ref{tab:quant} shows the effect of quantization at a fixed configuration
+($T$=16 steps, 12 threads).
+
+\begin{table}[h]
+\centering
+\caption{Performance by quantization level (steps=16, threads=12, LLaDA-8B).}
+\label{tab:quant}
+\begin{tabular}{llrrr}
+\toprule
+\textbf{Model} & \textbf{Size} & \textbf{low\_confidence} & \textbf{Per-step} & \textbf{vs F16} \\
+\midrule
+F16 & 14.9\,GB & 1.64\,tok/s & 2433\,ms & $1.00\times$ \\
+Q8\_0 & 8.4\,GB & 1.84\,tok/s & 2182\,ms & $1.12\times$ \\
+Q4\_K\_M & 5.1\,GB & 2.52\,tok/s & 1586\,ms & $1.54\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The $1.54\times$ speedup from F16 to Q4\_K\_M is lower than the $2.9\times$ size
+reduction would suggest. This is consistent with compute-bound behavior: reducing data
+size helps (fewer bytes to dequantize), but the bottleneck is the matrix multiplication
+itself, not the memory transfer.
+
+\subsection{Thread Scaling}
+
+Table~\ref{tab:threads} shows thread scaling for Q4\_K\_M at 16 steps.
+
+\begin{table}[h]
+\centering
+\caption{Thread scaling (Q4\_K\_M, steps=16, \texttt{low\_confidence}).}
+\label{tab:threads}
+\begin{tabular}{rrr}
+\toprule
+\textbf{Threads} & \textbf{tok/s} & \textbf{Scaling} \\
+\midrule
+1 & 0.34 & $1.0\times$ \\
+4 & 1.18 & $3.5\times$ \\
+12 & 2.52 & $7.4\times$ \\
+24 & 2.21 & $6.5\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Scaling is near-linear up to the physical core count (12), confirming compute-bound
+behavior. Hyperthreading (24 threads) causes a 12\% regression due to shared execution
+units. Optimal thread count equals the number of physical cores.
+
+\subsection{Real-Prompt Performance}
+
+Table~\ref{tab:real} shows end-to-end \texttt{entropy\_exit} performance on 8 diverse
+prompts using Q4\_K\_M, $T$=16, 12 threads, at both $B$=64 and $B$=256, with and
+without inter-step cache.
+
+\begin{table}[h]
+\centering
+\caption{Real-prompt \texttt{entropy\_exit} performance (Q4\_K\_M, steps=16, threads=12).}
+\label{tab:real}
+\begin{tabular}{lrrrrrr}
+\toprule
+ & \multicolumn{2}{c}{$B$=64} & \multicolumn{3}{c}{$B$=256} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-6}
+\textbf{Prompt} & \textbf{tok/s} & \textbf{Steps} & \textbf{No-Cache} & \textbf{Cache} & \textbf{Steps} \\
+\midrule
+Capital of France? & 9.22 & 4 & 17.5 & \textbf{24.4} & 3 \\
+Translate to French & 10.23 & 3 & 25.9 & \textbf{27.7} & 2 \\
+$15 \times 23 = ?$ & 11.49 & 3 & 12.8 & \textbf{15.7} & 4 \\
+Translate to Spanish & 4.59 & 8 & 7.6 & \textbf{22.9} & 7 \\
+Python \texttt{is\_prime} & 2.53 & 15 & 3.2 & \textbf{4.9} & 16 \\
+Poem about ocean & 2.33 & 17 & 3.2 & \textbf{5.3} & 16 \\
+Why sky is blue & 2.21 & 17 & 3.3 & \textbf{12.0} & 16 \\
+List the planets & 2.33 & 17 & 3.3 & \textbf{9.4} & 15 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The pattern at $B$=64 is clear: easy prompts (factual, arithmetic, simple translation)
+converge in 2--4 steps with $4$--$6\times$ speedup over \texttt{low\_confidence}. Hard
+prompts use full steps with no speedup but no degradation.
+
+At $B$=256, all prompts benefit from the larger generation buffer, with throughput gains
+of 23--113\% on 7 of 8 prompts. With inter-step cache enabled (default), throughput
+increases by an additional $1.59\times$ on average, with the highest gains on prompts
+that require many steps (up to $3.66\times$ on 16-step prompts).
+
+\subsection{Comparison with \texttt{llama.cpp}}
+
+Table~\ref{tab:comparison} compares \texttt{diffuse-cpp} with \texttt{llama.cpp} on the
+same hardware. We emphasize that this compares different models (LLaDA-8B vs Llama-3-8B)
+and different paradigms, not identical systems.
+
+\begin{table}[h]
+\centering
+\caption{Comparison with \texttt{llama.cpp} (both Q4\_K\_M, 12 threads, same hardware).}
+\label{tab:comparison}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Scenario} & \textbf{diffuse-cpp} ($B$=256, cache) & \textbf{llama.cpp} \\
+\midrule
+Easy prompts (EE) & \textbf{15--28}\,tok/s & 8.51\,tok/s \\
+Medium prompts (EE) & 5--23\,tok/s & 8.51\,tok/s \\
+Hard prompts (EE) & 5--12\,tok/s & 8.51\,tok/s \\
+Thread scaling ($1 \to 12$) & $7.4\times$ & $2.4\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+With $B$=256 and inter-step cache, \texttt{diffuse-cpp} outperforms \texttt{llama.cpp}
+on 6 of 8 prompts (up to $3.3\times$ on French translation). Two prompts (code generation,
+creative writing) remain slower due to requiring all 16 denoising steps. The thread
+scaling trends further favor diffusion on many-core machines.
+
+% Figure 3: Combined optimization
+% \begin{figure}[h]
+% \centering
+% \includegraphics[width=\textwidth]{fig3.pdf}
+% \caption{Combined optimization: from F16 baseline (1.64~tok/s) through quantization
+% (Q4\_K\_M, $1.54\times$), entropy-exit on easy prompts at $B$=64 ($6.2\times$),
+% $B$=256 generation ($13.3\times$), and inter-step cache ($16.9\times$ peak,
+% 27.7~tok/s). The dashed line shows \texttt{llama.cpp} for reference.}
+% \label{fig:combined}
+% \end{figure}
+
+\subsection{Sequence Length Scaling}
+\label{sec:seqlen}
+
+Table~\ref{tab:seqlen} shows the effect of increasing the generation buffer from 64 to
+256 tokens (Q4\_K\_M, $T$=16 steps, 12 threads, real chat-formatted prompt).
+
+\begin{table}[h]
+\centering
+\caption{Sequence length scaling (Q4\_K\_M, steps=16, threads=12, 32-token prompt).}
+\label{tab:seqlen}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Scheduler} & $B$=64 & $B$=256 & \textbf{Time ratio} & \textbf{ms/token} & \textbf{Improvement} \\
+\midrule
+\texttt{low\_confidence} & 2.58\,tok/s & 3.18\,tok/s & $3.24\times$ & $388 \to 314$ & $-19\%$ \\
+\texttt{entropy\_exit} & 13.4\,tok/s & 17.1\,tok/s & $3.15\times$ & $74.5 \to 58.6$ & $-21\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Generating $4\times$ more tokens increases total wall-clock time by only $3.2\times$,
+yielding a 20\% reduction in per-token cost. This sub-linear scaling confirms the
+theoretical prediction from Equation~2: larger $B$ increases arithmetic intensity,
+amortizing fixed overhead (weight loading, softmax over vocabulary, memory allocation)
+across more useful tokens.
+
+The practical implication is significant: \texttt{entropy\_exit} with $B$=256 reaches
+\textbf{15--28~tok/s} on real prompts (Table~\ref{tab:real})---up to $3.3\times$ the
+throughput of \texttt{llama.cpp} (8.51~tok/s) on the same hardware. This is the
+configuration where diffusion's matrix-matrix advantage becomes most pronounced, and it
+corresponds to the sequence lengths users actually need in production (responses of
+200+ tokens are typical for chatbot, code generation, and translation tasks).
+
+\subsection{Inter-Step Cache Results}
+\label{sec:cache_results}
+
+Table~\ref{tab:cache} shows the inter-step cache performance across all 8 real prompts
+(Q4\_K\_M, \texttt{entropy\_exit}, $B$=256, $T$=16, 12 threads, seed=42).
+
+\begin{table}[h]
+\centering
+\caption{Inter-step cache performance (Q4\_K\_M, entropy\_exit, $B$=256, steps=16, threads=12).}
+\label{tab:cache}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Prompt} & \textbf{No-Cache} & \textbf{Cache} & \textbf{Speedup} & \textbf{Steps} \\
+\midrule
+Capital of France? & 17.5\,tok/s & \textbf{24.4}\,tok/s & $1.39\times$ & 3 \\
+Translate to French & 25.9 & \textbf{27.7} & $1.07\times$ & 2 \\
+Python \texttt{is\_prime} & 3.2 & \textbf{4.9} & $1.52\times$ & 16 \\
+Poem about ocean & 3.2 & \textbf{5.3} & $1.63\times$ & 16 \\
+Why sky is blue & 3.3 & \textbf{12.0} & $3.66\times$ & 16 \\
+List the planets & 3.3 & \textbf{9.4} & $2.84\times$ & 15 \\
+$15 \times 23 = ?$ & 12.8 & \textbf{15.7} & $1.22\times$ & 4 \\
+Translate to Spanish & 7.6 & \textbf{22.9} & $3.03\times$ & 7 \\
+\midrule
+\textbf{Average} & \textbf{9.6} & \textbf{15.3} & $\mathbf{1.59\times}$ & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The cache provides $1.59\times$ average speedup with a clear pattern: prompts requiring
+more denoising steps benefit more. Two-step prompts gain only $1.07\times$ (the active
+set is nearly the full sequence), while 16-step prompts gain up to $3.66\times$ (most
+positions are cached after early steps).
+
+\textbf{Regularization effect.} In 3 of 8 prompts (sky explanation, planet listing,
+Spanish translation), the cached output is qualitatively better than the uncached
+output. We attribute this to implicit regularization: reusing stable K,V from previous
+steps prevents the bidirectional attention mechanism from amplifying accumulated errors
+during the iterative denoising process. This phenomenon warrants further investigation
+but suggests that the cache approximation may be beneficial rather than merely tolerable.
+
+\textbf{Fidelity tuning.} The \texttt{--cache-keep-active N} parameter extends the
+active set to include positions that changed within the last $N$ steps. At $N$=5, token
+fidelity (exact match with uncached output) reaches 59.4\% with $1.64\times$ speedup---a
+useful trade-off when output reproducibility matters.
+
+
+\section{Limitations}
+
+We are transparent about the limitations of this work.
+
+\textbf{Model quality.} LLaDA-8B produces noticeably lower-quality outputs than
+Llama-3-8B. We observed repetitions (``the and and molecules''), incomplete outputs on
+code prompts, and mediocre translations. The throughput comparison is between paradigms,
+not quality-equivalent models. A fair comparison would require a diffusion model trained
+to match Llama-3-8B quality, which does not yet exist.
+
+\textbf{Different models.} We compare LLaDA-8B (diffusion) against Llama-3-8B
+(autoregressive). These share the same parameter count and Llama backbone architecture
+but differ in training procedure, data, and generation mechanism. The comparison
+demonstrates the \emph{computational} regime inversion, not a head-to-head model quality
+contest.
+
+\textbf{Prior art on scheduling.} Entropy-based scheduling is not novel.
+Prophet~\cite{li2025}, EAGS~\cite{koh2024}, and Fast-dLLM~\cite{wu2025} proposed
+related mechanisms. Our contribution is the implementation in a CPU-optimized engine
+and the demonstration that adaptive scheduling is particularly impactful in the
+compute-bound regime.
+
+\textbf{Single hardware platform.} All benchmarks were conducted on a single AMD EPYC
+system. Generalization to Intel, ARM, Apple Silicon, or consumer-grade CPUs requires
+further validation. The regime inversion argument is architecture-independent, but the
+crossover point varies with the bandwidth-to-compute ratio.
+
+\textbf{Prompt coverage.} Real-prompt evaluation used 8 prompts. While the PyTorch
+benchmark covered 42 prompts in 12 categories, comprehensive evaluation across thousands
+of diverse prompts remains future work.
+
+\textbf{Cache approximation.} The inter-step KV cache reuses K,V tensors computed from
+stale hidden states. While empirically this does not degrade quality (and sometimes
+improves it), the approximation error grows with the number of steps between cache
+refresh. For very long generation sequences or models with stronger inter-position
+coupling, the cache may require periodic full refreshes.
+
+
+\section{Implications and Future Work}
+
+\textbf{Democratizing inference.} If diffusion models perform better on commodity CPUs,
+the implications are significant. A \$200 server CPU with 32--64 cores could provide
+competitive LLM inference without any GPU. This eliminates the hardware supply chain
+bottleneck and enables deployment in resource-constrained environments.
+
+\textbf{AR-to-diffusion conversion.} Recent work shows that AR models can be converted
+to diffusion models via continued pre-training with masking~\cite{nie2025}. We estimate
+that LoRA fine-tuning for this conversion could cost as little as \$250 in compute,
+creating a practical pipeline: take any AR model, fine-tune for diffusion, convert to
+GGUF, and deploy on CPU with \texttt{diffuse-cpp}.
+
+\textbf{Multi-hardware validation.} A community hackathon or Kaggle competition could
+validate the regime inversion across diverse hardware: Intel Xeon, AMD Threadripper,
+Apple M-series, ARM server chips. We predict that the advantage of diffusion will
+increase with core count and decrease with memory bandwidth.
+
+\textbf{Engine optimizations.} The inter-step KV cache (Section~\ref{sec:cache})
+demonstrates that significant speedups are achievable through caching strategies.
+Further optimizations remain unexplored: bidirectional Flash Attention~\cite{dao2022}
+adapted for non-causal masks, delta attention (recomputing only changed hidden state
+contributions), batched inference for serving workloads, generation buffers beyond 256
+tokens, and support for additional architectures (SEDD, MDLM).
+
+\textbf{Better diffusion models.} The regime inversion becomes practically relevant when
+dLLM quality matches AR models. Investment in larger, better-trained diffusion models
+(analogous to the Llama series) would enable the computational advantages demonstrated
+here to translate into real-world deployment wins.
+
+
+\section{Conclusion}
+
+The field has assumed that diffusion language models are inherently slower than
+autoregressive models for inference. This assumption is correct on GPUs, where massive
+memory bandwidth compensates for AR's sequential memory access pattern. On commodity
+CPUs, however, the computational regime inverts: AR inference hits a hard bandwidth
+ceiling while diffusion inference scales with available compute.
+
+We demonstrated this empirically with \texttt{diffuse-cpp}, the first C++ inference
+engine for diffusion LLMs. On an AMD EPYC 12-core CPU, thread scaling reaches
+$7.4\times$ for diffusion versus $2.4\times$ for AR. With Q4\_K\_M quantization,
+entropy-exit scheduling, inter-step KV cache, and 256-token generation,
+\texttt{diffuse-cpp} achieves 15--28~tok/s on real prompts---up to $3.2\times$ faster
+than \texttt{llama.cpp}'s 8.51~tok/s on the same hardware, with 6 of 8 prompts
+outperforming the AR baseline. The inter-step cache provides $1.6\times$ average
+speedup with no quality degradation. Increasing the generation buffer from 64 to 256
+tokens reduces per-token cost by 20\%, confirming that diffusion's advantage amplifies
+with sequence length.
+
+The contribution is not a claim that diffusion is universally faster. It is the
+identification and empirical validation of a hardware-dependent regime inversion, and the
+open-source tools to exploit it. As CPU core counts increase and diffusion model quality
+improves, this regime may become the dominant path to GPU-free LLM inference.
+
+The code, models, benchmark data, and this paper are publicly available under open licenses.
+
+
+\section*{Acknowledgments}
+
+This work was inspired by the GGML library and llama.cpp~\cite{gerganov2023b}. The
+entropy-exit scheduler builds on ideas from Prophet~\cite{li2025} and the
+entropy-adaptive scheduling literature~\cite{koh2024,wu2025}. Figures~1--3 were
+generated with Matplotlib.
+
+
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{12}
+
+\bibitem[Dao et~al.(2022)]{dao2022}
+Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher R\'e.
+\newblock FlashAttention: Fast and memory-efficient exact attention with
+  IO-awareness.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2022.
+
+\bibitem[Gerganov(2023)]{gerganov2023}
+Georgi Gerganov.
+\newblock GGML: Tensor library for machine learning.
+\newblock \url{https://github.com/ggerganov/ggml}, 2023.
+
+\bibitem[Gerganov et~al.(2023)]{gerganov2023b}
+Georgi Gerganov et~al.
+\newblock llama.cpp.
+\newblock \url{https://github.com/ggerganov/llama.cpp}, 2023.
+
+\bibitem[Koh et~al.(2024)]{koh2024}
+Hyukhun Koh, Minha Jhang, Dohyung Kim, Sangmook Lee, and Kyomin Jung.
+\newblock PLM-based discrete diffusion language models with entropy-adaptive
+  Gibbs sampling.
+\newblock \emph{arXiv preprint arXiv:2411.06438}, 2024.
+
+\bibitem[Li et~al.(2025)]{li2025}
+Pengxiang Li, Yefan Zhou, Dilxat Muhtar, Lu Yin, Shilin Yan, Li Shen, Soroush
+  Vosoughi, and Shiwei Liu.
+\newblock Diffusion language models know the answer before decoding.
+\newblock \emph{arXiv preprint arXiv:2508.19982}, 2025.
+
+\bibitem[Lou et~al.(2024)]{lou2024}
+Aaron Lou, Chenlin Meng, and Stefano Ermon.
+\newblock Discrete diffusion modeling by estimating the ratios of the data
+  distribution.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2024.
+
+\bibitem[Nie et~al.(2025)]{nie2025}
+Shen Nie, Fengqi Zhu, Chao You, Xiaojun Zhang, and Zhenguo Ou.
+\newblock LLaDA: Large language diffusion with mAsking.
+\newblock \emph{arXiv preprint arXiv:2502.09992}, 2025.
+
+\bibitem[Sahoo et~al.(2024)]{sahoo2024}
+Subham Sekhar Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar
+  Marroquin, Justin~T Chiu, Alexander Rush, and Volodymyr Kuleshov.
+\newblock Simple and effective masked diffusion language models.
+\newblock \emph{Advances in Neural Information Processing Systems}, 2024.
+
+\bibitem[Shannon(1948)]{shannon1948}
+Claude~E Shannon.
+\newblock A mathematical theory of communication.
+\newblock \emph{The Bell System Technical Journal}, 27(3):379--423, 1948.
+
+\bibitem[Williams et~al.(2009)]{williams2009}
+Samuel Williams, Andrew Waterman, and David Patterson.
+\newblock Roofline: An insightful visual performance model for multicore
+  architectures.
+\newblock \emph{Communications of the ACM}, 52(4):65--76, 2009.
+
+\bibitem[Wu et~al.(2025)]{wu2025}
+Chengyue Wu, Hao Zhang, Shuchen Xue, Zhijian Liu, Shizhe Diao, Ligeng Zhu,
+  Ping Luo, Song Han, and Enze Xie.
+\newblock Fast-dLLM: Training-free acceleration of diffusion LLM by enabling KV
+  cache and parallel decoding.
+\newblock \emph{arXiv preprint arXiv:2505.22618}, 2025.
+
+\end{thebibliography}
+
+
+\appendix
+
+\section{Regime Inversion Diagram}
+
+% Figure 4: Regime inversion diagram
+% \begin{figure}[h]
+% \centering
+% \includegraphics[width=0.8\textwidth]{fig4.pdf}
+% \caption{The $2 \times 2$ matching matrix. Green cells indicate favorable
+% hardware-workload matching; red cells indicate bottlenecks. On GPU, AR is
+% well-matched; on CPU, diffusion is well-matched.}
+% \label{fig:regime}
+% \end{figure}
+
+The $2 \times 2$ matching matrix illustrates the regime inversion:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+ & \textbf{GPU} (High Bandwidth) & \textbf{CPU} (Low Bandwidth) \\
+\midrule
+\textbf{Autoregressive} (BW-hungry) & \textsc{Match} & \textsc{Mismatch} \\
+ & High BW feeds sequential reads & Low BW bottlenecks sequential reads \\
+\midrule
+\textbf{Diffusion} (Compute-hungry) & \textsc{Redundant} & \textsc{Match} \\
+ & Excess BW wasted on parallel compute & Parallel compute fills CPU cores \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\end{document}

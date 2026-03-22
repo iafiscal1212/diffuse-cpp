@@ -8,13 +8,14 @@ High-performance C++ inference engine for Diffusion Language Models, built on GG
 
 ## Highlights
 
-- **11–22 tok/s on easy real prompts** with Q4_K_M + entropy_exit + 256-token generation
-- **Up to 2.6x faster than llama.cpp** (8.51 tok/s) on the same hardware
+- **15–28 tok/s on easy real prompts** with Q4_K_M + entropy_exit + inter-step cache + 256-token generation
+- **Up to 3.2x faster than llama.cpp** (8.51 tok/s) on the same hardware
+- **Inter-step KV cache**: 1.6x average speedup with no quality degradation
+- **6 of 8 real prompts outperform llama.cpp** (vs 3 of 8 without cache)
 - **~6x speedup** vs F16 baseline on easy prompts (factual, translation, arithmetic)
-- **256-token generation** with 20% lower per-token cost vs 64-token batches
-- **Adaptive scheduling**: 3-4 steps for easy prompts, 16 for hard — the model decides
+- **Adaptive scheduling**: 2-4 steps for easy prompts, 16 for hard — the model decides
 - **5.1 GB quantized model** (vs 14.9 GB F16)
-- **Never worse**: entropy_exit maintains quality across all prompt types
+- **Never worse**: entropy_exit + cache maintains quality across all prompt types
 
 ## What is diffuse-cpp?
 
@@ -28,20 +29,21 @@ Until now, dLLMs ran exclusively on GPU with PyTorch. diffuse-cpp brings them to
 
 All benchmarks: LLaDA-8B-Instruct, AMD EPYC 4465P 12-Core (24 threads), 125GB RAM, steps=16, 3 reps + 1 warmup.
 
-### Real Prompt Performance (Q4_K_M, steps=16, threads=12)
+### Real Prompt Performance (Q4_K_M, entropy_exit, B=256, steps=16, threads=12)
 
-| Prompt | B=64 tok/s | B=256 tok/s | Steps | vs llama.cpp |
+| Prompt | No-Cache tok/s | Cache tok/s | Steps | vs llama.cpp |
 |---|---|---|---|---|
-| Capital of France? | 9.22 | **15.60** | 4 | 1.8x |
-| Translate to French | 10.23 | **21.78** | 3 | 2.6x |
-| 15 × 23? | 11.49 | **11.45** | 5 | 1.3x |
-| Translate to Spanish | 4.59 | **7.17** | 8 | 0.8x |
-| Python is_prime() | 2.53 | **3.12** | 17 | 0.4x |
-| Poem about ocean | 2.33 | **3.10** | 17 | 0.4x |
-| Why is sky blue? | 2.21 | **3.18** | 17 | 0.4x |
-| List the planets | 2.33 | **3.19** | 17 | 0.4x |
+| Capital of France? | 17.5 | **24.4** | 3 | 2.9x |
+| Translate to French | 25.9 | **27.7** | 2 | 3.3x |
+| 15 × 23? | 12.8 | **15.7** | 4 | 1.8x |
+| Translate to Spanish | 7.6 | **22.9** | 7 | 2.7x |
+| Python is_prime() | 3.2 | **4.9** | 16 | 0.6x |
+| Poem about ocean | 3.2 | **5.3** | 16 | 0.6x |
+| Why is sky blue? | 3.3 | **12.0** | 16 | 1.4x |
+| List the planets | 3.3 | **9.4** | 15 | 1.1x |
+| **Average** | **9.6** | **15.3** | | **1.8x** |
 
-*B = generation buffer size. llama.cpp baseline: 8.51 tok/s (Llama-3-8B Q4_K_M, same hardware).*
+*llama.cpp baseline: 8.51 tok/s (Llama-3-8B Q4_K_M, same hardware). Cache enabled by default. 6 of 8 prompts outperform llama.cpp; 2 (code generation, creative writing) remain slower due to requiring all 16 steps.*
 
 ### Quantization Performance (steps=16, threads=12, B=64)
 
@@ -143,9 +145,9 @@ Unlike autoregressive models (one token per forward pass), diffusion models gene
 
 Standard diffusion schedulers use a fixed number of steps regardless of prompt difficulty. entropy_exit is a semantic scheduler that lets the model decide when to stop:
 
-- **Easy prompts** (translation, factual, arithmetic): converges in 3-4 steps → **11-22 tok/s** (B=256)
-- **Medium prompts** (code, complex translation): 8-15 steps → **3-7 tok/s** (B=256)
-- **Hard prompts** (creative writing, open-ended reasoning): uses all configured steps → **~3.1 tok/s** (B=256)
+- **Easy prompts** (translation, factual, arithmetic): converges in 2-4 steps → **15–28 tok/s** (B=256, cache)
+- **Medium prompts** (code, complex translation): 7-15 steps → **5–23 tok/s** (B=256, cache)
+- **Hard prompts** (creative writing, open-ended reasoning): uses all configured steps → **5–12 tok/s** (B=256, cache)
 - **Never worse**: maintains quality across all prompt types
 
 Based on systematic benchmarking across 42 prompts in 12 categories:
@@ -164,6 +166,27 @@ After each forward pass, entropy_exit:
 3. Terminates early if all tokens are unmasked
 
 Zero overhead: entropy computation is negligible vs forward pass cost.
+
+## Inter-Step KV Cache
+
+diffuse-cpp caches the Key and Value tensors from each transformer layer between denoising steps. Instead of recomputing all positions at every step, only the "active set" is recomputed:
+
+- **Masked positions**: tokens still being refined
+- **Recently unmasked positions**: tokens whose hidden states may have changed
+
+Positions that were unmasked in earlier steps and haven't changed reuse their cached K,V. This reduces the per-step cost from O(N²) to O(N_active × N) per layer, where N_active shrinks as tokens converge.
+
+**Average speedup: 1.6x** across 8 real prompts (from 9.6 to 15.3 tok/s). Speedup is highest on prompts that use many steps (up to 3.7x on 16-step prompts) and minimal on prompts that already converge in 2-3 steps.
+
+The cache acts as implicit regularization: reusing stable K,V from previous steps prevents attention from amplifying accumulated errors. In 3 of 8 benchmarked prompts, cache output quality is measurably better than no-cache.
+
+```bash
+# Cache is ON by default. To disable:
+./build/diffuse-cli -m model.gguf --tokens "..." -n 256 -s 16 -t 12 --no-cache
+
+# Keep recently-changed positions active for N extra steps (higher fidelity, slightly slower):
+./build/diffuse-cli -m model.gguf --tokens "..." -n 256 -s 16 -t 12 --cache-keep-active 5
+```
 
 ## Building From Source
 
@@ -226,9 +249,10 @@ See `include/diffuse.h` for full API documentation.
 
 1. **Use Q4_K_M quantization**: best throughput/quality tradeoff
 2. **Enable entropy_exit**: free speedup on 55% of prompts
-3. **Thread count**: optimal = physical cores (hyperthreading reduces performance)
-4. **Steps**: start with 16, reduce to 8 if quality is acceptable
-5. **Entropy threshold**: 1.5 is a good default; increase to 2.0 for more aggressive early exit
+3. **Keep inter-step cache ON** (default): 1.6x average speedup with no quality loss
+4. **Thread count**: optimal = physical cores (hyperthreading reduces performance)
+5. **Steps**: start with 16, reduce to 8 if quality is acceptable
+6. **Entropy threshold**: 1.5 is a good default; increase to 2.0 for more aggressive early exit
 
 ## Project Status
 

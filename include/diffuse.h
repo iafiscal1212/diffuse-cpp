@@ -47,6 +47,9 @@ struct diffuse_sampler_params {
     diffuse_remasking  remasking  = diffuse_remasking::LOW_CONFIDENCE;
     uint32_t seed       = 42;
     float    entropy_threshold = 1.5f;  // For ENTROPY_EXIT: unmask tokens below this
+    bool     use_cache   = true;        // Inter-step KV cache (--no-cache to disable)
+    int      cache_refresh    = 0;      // Force full forward every N steps (0 = never)
+    int      cache_keep_active = 0;     // Keep recently-changed positions active N extra steps
 };
 
 // ── Generation parameters ──────────────────────────────────────

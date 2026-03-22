@@ -1,9 +1,12 @@
 #include "diffuse-sampler.h"
+#include "diffuse-graph.h"
+#include "diffuse-cache.h"
 
 #include <algorithm>
 #include <numeric>
 #include <random>
 #include <cmath>
+#include <chrono>
 
 // ── Masking schedule ───────────────────────────────────────────
 static int tokens_to_unmask(int step, int total_steps, int total_masked,
@@ -53,7 +56,7 @@ static float compute_entropy(const float * logits, int n_vocab) {
     return entropy;
 }
 
-// ── Iterative unmasking sampler ────────────────────────────────
+// ── Iterative unmasking sampler with inter-step caching ─────────
 std::vector<int32_t> diffuse_sample(
         diffuse_context * ctx,
         const std::vector<int32_t> & prompt_tokens,
@@ -78,25 +81,135 @@ std::vector<int32_t> diffuse_sample(
     }
     int n_masked = n_generate;
 
-    // Logits buffer
-    std::vector<float> logits(total_len * n_vocab);
+    // Full logits buffer (only used for step 0)
+    std::vector<float> logits_full(total_len * n_vocab);
 
     // RNG for stochastic sampling
     std::mt19937 rng(params.seed);
 
-    DIFFUSE_LOG("diffusion: %d steps, %d tokens to generate, scheduler=%s",
+    // ── Inter-step KV cache ──────────────────────────────────────
+    const bool use_cache = params.use_cache;
+    diffuse_step_cache cache;
+    if (use_cache) {
+        cache.init(total_len, prompt_len,
+                   (int)hp.n_layer, (int)hp.n_embd_head(), (int)hp.n_head);
+    }
+
+    const int cache_refresh = params.cache_refresh;
+    const int cache_keep_active = params.cache_keep_active;
+
+    DIFFUSE_LOG("diffusion: %d steps, %d tokens to generate, scheduler=%s, cache=%s, refresh=%d, keep_active=%d",
                 params.n_steps, n_generate,
                 params.remasking == diffuse_remasking::ENTROPY_EXIT ? "entropy_exit" :
                 params.remasking == diffuse_remasking::LOW_CONFIDENCE ? "low_confidence" :
-                "random");
+                "random",
+                use_cache ? "ON" : "OFF",
+                cache_refresh, cache_keep_active);
+
+    // ── Timing accumulators ──────────────────────────────────────
+    using clk = std::chrono::steady_clock;
+    double total_forward_ms  = 0.0;
+    double total_sample_ms   = 0.0;
+    double total_sort_ms     = 0.0;
+    double total_unmask_ms   = 0.0;
+    int    actual_steps      = 0;
+    auto   gen_start         = clk::now();
 
     for (int step = 0; step < params.n_steps && n_masked > 0; step++) {
-        // Forward pass
-        if (!diffuse_forward(ctx, seq.data(), total_len, logits.data())) {
-            DIFFUSE_DIE("forward pass failed at step %d", step);
+        actual_steps++;
+
+        // ── Forward pass (timed) ─────────────────────────────────
+        auto t0 = clk::now();
+
+        // Logits pointer: where to read logits from after forward pass
+        // For full forward: logits are in logits_full[pos * n_vocab]
+        // For cached forward: logits are in logits_active[active_idx * n_vocab]
+        float * logit_source = nullptr;
+
+        // Active set tracking for cached forward
+        std::vector<int> cached_positions, active_positions, active_to_orig;
+        int n_active = 0;
+        bool used_cache = false;
+
+        // Force full forward on step 0, when cache disabled, or at refresh intervals
+        bool force_full = !use_cache || !cache.initialized ||
+                          (cache_refresh > 0 && step > 0 && (step % cache_refresh == 0));
+
+        if (force_full) {
+            // ── Full forward (step 0, refresh, or cache disabled) ─
+            if (!diffuse_forward_full(ctx, seq.data(), total_len,
+                                      logits_full.data(),
+                                      use_cache ? &cache : nullptr)) {
+                DIFFUSE_DIE("forward pass failed at step %d", step);
+            }
+            if (use_cache) cache.update_seq(seq.data(), total_len);
+            logit_source = logits_full.data();
+            n_active = total_len;  // all positions
+        } else {
+            // ── Steps 1+: cached forward, only active positions ──
+            cache.compute_active_set(seq.data(), is_masked, total_len,
+                                     step, cache_keep_active,
+                                     cached_positions, active_positions,
+                                     active_to_orig);
+            n_active = (int)active_positions.size();
+
+            if (n_active >= total_len || n_active == 0) {
+                // Edge case: all active or none → full forward
+                if (!diffuse_forward_full(ctx, seq.data(), total_len,
+                                          logits_full.data(), &cache)) {
+                    DIFFUSE_DIE("forward pass failed at step %d", step);
+                }
+                cache.update_seq(seq.data(), total_len);
+                logit_source = logits_full.data();
+                n_active = total_len;
+            } else {
+                // Build active token arrays
+                std::vector<int32_t> active_tokens(n_active);
+                std::vector<int32_t> active_pos_idx(n_active);
+                for (int a = 0; a < n_active; a++) {
+                    int orig = active_positions[a];
+                    active_tokens[a] = seq[orig];
+                    active_pos_idx[a] = orig;
+                }
+
+                // Allocate logits for active positions only
+                std::vector<float> logits_active(n_active * n_vocab);
+
+                if (!diffuse_forward_cached(
+                        ctx, active_tokens.data(), active_pos_idx.data(),
+                        n_active, total_len, &cache,
+                        cached_positions, active_positions,
+                        logits_active.data())) {
+                    DIFFUSE_DIE("cached forward failed at step %d", step);
+                }
+                cache.update_seq(seq.data(), total_len);
+                used_cache = true;
+
+                // Scatter active logits into full logits buffer
+                // We only need logits for masked positions, which are
+                // always in the active set. Build a map: orig_pos → active_idx
+                // for efficient lookup.
+                // Actually, we can iterate only over masked positions
+                // and find their index in active_positions.
+
+                // For simplicity: store in logits_full at original positions
+                for (int a = 0; a < n_active; a++) {
+                    int orig = active_positions[a];
+                    memcpy(logits_full.data() + (size_t)orig * n_vocab,
+                           logits_active.data() + (size_t)a * n_vocab,
+                           n_vocab * sizeof(float));
+                }
+                logit_source = logits_full.data();
+            }
         }
 
-        // For each masked position, compute candidate token, confidence, and entropy
+        auto t1 = clk::now();
+        double fwd_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        total_forward_ms += fwd_ms;
+
+        // ── Sampling: extract candidates (timed) ─────────────────
+        auto t2 = clk::now();
+
         struct candidate {
             int pos;
             int token;
@@ -109,11 +222,10 @@ std::vector<int32_t> diffuse_sample(
         for (int i = 0; i < total_len; i++) {
             if (!is_masked[i]) continue;
 
-            const float * logit_row = logits.data() + (size_t)i * n_vocab;
+            const float * logit_row = logit_source + (size_t)i * n_vocab;
             float ent = compute_entropy(logit_row, n_vocab);
 
             if (params.temperature <= 0.0f) {
-                // Argmax
                 int best = 0;
                 float best_val = logit_row[0];
                 for (int v = 1; v < n_vocab; v++) {
@@ -124,7 +236,6 @@ std::vector<int32_t> diffuse_sample(
                 }
                 candidates.push_back({i, best, best_val, ent});
             } else {
-                // Temperature sampling
                 float max_logit = *std::max_element(logit_row, logit_row + n_vocab);
                 std::vector<float> probs(n_vocab);
                 float sum = 0.0f;
@@ -139,40 +250,43 @@ std::vector<int32_t> diffuse_sample(
                 candidates.push_back({i, sampled, probs[sampled], ent});
             }
         }
+        auto t3 = clk::now();
+        total_sample_ms += std::chrono::duration<double, std::milli>(t3 - t2).count();
 
-        // Determine how many tokens to unmask this step
+        // ── Scheduling + sorting (timed) ─────────────────────────
+        auto t4 = clk::now();
+
         int n_unmask = tokens_to_unmask(step, params.n_steps, n_masked, params.schedule);
 
         if (params.remasking == diffuse_remasking::ENTROPY_EXIT) {
-            // Entropy-exit: unmask all low-entropy tokens + scheduled amount
-            // Sort by entropy ascending (easiest first)
             std::sort(candidates.begin(), candidates.end(),
                       [](const candidate & a, const candidate & b) {
                           return a.entropy < b.entropy;
                       });
 
-            // Count tokens below entropy threshold
             int n_easy = 0;
             for (const auto & c : candidates) {
                 if (c.entropy < params.entropy_threshold) n_easy++;
-                else break;  // sorted, so no need to continue
+                else break;
             }
 
-            // Unmask at least n_unmask, but also all easy tokens
             n_unmask = std::max(n_unmask, n_easy);
             n_unmask = std::min(n_unmask, (int)candidates.size());
         } else if (params.remasking == diffuse_remasking::LOW_CONFIDENCE) {
-            // Sort by confidence descending → unmask the most confident
             std::sort(candidates.begin(), candidates.end(),
                       [](const candidate & a, const candidate & b) {
                           return a.confidence > b.confidence;
                       });
         } else {
-            // Random order
             std::shuffle(candidates.begin(), candidates.end(), rng);
         }
 
-        // Unmask top-n_unmask
+        auto t5 = clk::now();
+        total_sort_ms += std::chrono::duration<double, std::milli>(t5 - t4).count();
+
+        // ── Unmasking (timed) ────────────────────────────────────
+        auto t6 = clk::now();
+
         int actually_unmasked = 0;
         for (int j = 0; j < n_unmask && j < (int)candidates.size(); j++) {
             int pos = candidates[j].pos;
@@ -182,13 +296,48 @@ std::vector<int32_t> diffuse_sample(
             actually_unmasked++;
         }
 
-        DIFFUSE_LOG("  step %d/%d: unmasked %d tokens, %d remaining",
-                    step + 1, params.n_steps, actually_unmasked, n_masked);
+        auto t7 = clk::now();
+        total_unmask_ms += std::chrono::duration<double, std::milli>(t7 - t6).count();
+
+        DIFFUSE_LOG("  step %d/%d: unmasked %d tokens, %d remaining "
+                    "(fwd=%.1fms, active=%d/%d%s)",
+                    step + 1, params.n_steps, actually_unmasked, n_masked,
+                    fwd_ms,
+                    used_cache ? (int)active_positions.size() : total_len,
+                    total_len,
+                    used_cache ? " CACHED" :
+                    (force_full && step > 0) ? " REFRESH" : "");
 
         if (callback) {
             callback(step + 1, params.n_steps, seq);
         }
     }
+
+    // ── Timing summary ───────────────────────────────────────────
+    auto gen_end = clk::now();
+    double gen_total_ms = std::chrono::duration<double, std::milli>(gen_end - gen_start).count();
+    double overhead_ms  = gen_total_ms - total_forward_ms - total_sample_ms
+                        - total_sort_ms - total_unmask_ms;
+
+    DIFFUSE_LOG("=== TIMING BREAKDOWN (%d steps, cache=%s) ===",
+                actual_steps, use_cache ? "ON" : "OFF");
+    DIFFUSE_LOG("  forward:   %8.1f ms  (%5.1f%%)  avg=%.1f ms/step",
+                total_forward_ms, 100.0 * total_forward_ms / gen_total_ms,
+                total_forward_ms / std::max(actual_steps, 1));
+    DIFFUSE_LOG("  sampling:  %8.1f ms  (%5.1f%%)  avg=%.1f ms/step",
+                total_sample_ms, 100.0 * total_sample_ms / gen_total_ms,
+                total_sample_ms / std::max(actual_steps, 1));
+    DIFFUSE_LOG("  sorting:   %8.1f ms  (%5.1f%%)",
+                total_sort_ms, 100.0 * total_sort_ms / gen_total_ms);
+    DIFFUSE_LOG("  unmask:    %8.1f ms  (%5.1f%%)",
+                total_unmask_ms, 100.0 * total_unmask_ms / gen_total_ms);
+    DIFFUSE_LOG("  overhead:  %8.1f ms  (%5.1f%%)",
+                overhead_ms, 100.0 * overhead_ms / gen_total_ms);
+    DIFFUSE_LOG("  TOTAL:     %8.1f ms  (%.2f tok/s)",
+                gen_total_ms, 1000.0 * n_generate / gen_total_ms);
+
+    // ── Cleanup ──────────────────────────────────────────────────
+    cache.clear();
 
     // Return only the generated tokens
     return std::vector<int32_t>(seq.begin() + prompt_len, seq.end());

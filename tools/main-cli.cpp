@@ -19,6 +19,8 @@ static void print_usage(const char * prog) {
     fprintf(stderr, "  --schedule  cosine|linear (default: cosine)\n");
     fprintf(stderr, "  --remasking low_confidence|random|entropy_exit (default: low_confidence)\n");
     fprintf(stderr, "  --entropy-threshold F  Entropy threshold for entropy_exit (default: 1.5)\n");
+    fprintf(stderr, "  --cache-refresh INT   Force full forward every N steps (default: 0 = never)\n");
+    fprintf(stderr, "  --cache-keep-active INT  Keep recently-changed positions active N extra steps (default: 0)\n");
     fprintf(stderr, "\nNote: Tokenization is currently external. Use --tokens to pass\n");
     fprintf(stderr, "      pre-tokenized input as comma-separated IDs.\n");
     fprintf(stderr, "  --tokens IDs  Comma-separated token IDs (bypasses prompt)\n");
@@ -47,6 +49,9 @@ int main(int argc, char ** argv) {
     uint32_t seed  = 42;
     diffuse_schedule schedule = diffuse_schedule::COSINE;
     diffuse_remasking remasking = diffuse_remasking::LOW_CONFIDENCE;
+    bool use_cache = true;
+    int cache_refresh = 0;
+    int cache_keep_active = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
@@ -74,6 +79,12 @@ int main(int argc, char ** argv) {
             i++;
             if (strcmp(argv[i], "random") == 0) remasking = diffuse_remasking::RANDOM;
             else if (strcmp(argv[i], "entropy_exit") == 0) remasking = diffuse_remasking::ENTROPY_EXIT;
+        } else if (strcmp(argv[i], "--no-cache") == 0) {
+            use_cache = false;
+        } else if (strcmp(argv[i], "--cache-refresh") == 0 && i + 1 < argc) {
+            cache_refresh = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--cache-keep-active") == 0 && i + 1 < argc) {
+            cache_keep_active = atoi(argv[++i]);
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -120,6 +131,9 @@ int main(int argc, char ** argv) {
     sparams.schedule    = schedule;
     sparams.remasking   = remasking;
     sparams.entropy_threshold = entropy_threshold;
+    sparams.use_cache = use_cache;
+    sparams.cache_refresh = cache_refresh;
+    sparams.cache_keep_active = cache_keep_active;
 
     // Generate
     fprintf(stderr, "Generating %d tokens with %d diffusion steps...\n", n_generate, n_steps);

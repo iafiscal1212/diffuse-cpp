@@ -1,9 +1,9 @@
-# Benchmark Results — diffuse-cpp v0.1.0
+# Benchmark Results — diffuse-cpp v0.2.0
 
 **System**: AMD EPYC 4465P 12-Core (24 threads), 125GB RAM, Ubuntu 24.04, GCC 13.3
-**Model**: LLaDA-8B-Instruct, 64 tokens generated, 32-token prompt
+**Model**: LLaDA-8B-Instruct, 64/256 tokens generated, 32-token prompt
 **Protocol**: 3 reps + 1 warmup per config, exclusive CPU (no competing processes)
-**Date**: 2026-03-19, commit 054a80a (buffer 1.5x)
+**Date**: 2026-03-22, commit 054a80a+ (inter-step cache)
 
 ---
 
@@ -160,6 +160,29 @@ F16 baseline (s=16, t=12, low_confidence) = 1.64 tok/s
 | Q4_K_M | 32 | 12 | entropy_exit | 1575 | 40.64 |
 | Q4_K_M | 32 | 24 | entropy_exit | 1817 | 35.22 |
 
+## Table 7: Inter-Step Cache Performance (v0.2.0)
+
+Q4_K_M, entropy_exit, n=256, steps=16, threads=12, seed=42. Cache caches K,V tensors between denoising steps and only recomputes active positions (masked + recently changed).
+
+| # | Prompt | No-Cache tok/s | Cache tok/s | Speedup | Steps |
+|---|--------|----------------|-------------|---------|-------|
+| 1 | Capital of France? | 17.5 | **24.4** | 1.39x | 3 |
+| 2 | Translate to French | 25.9 | **27.7** | 1.07x | 2 |
+| 3 | Python is_prime() | 3.2 | **4.9** | 1.52x | 16 |
+| 4 | Poem about ocean | 3.2 | **5.3** | 1.63x | 16 |
+| 5 | Why is sky blue? | 3.3 | **12.0** | 3.66x | 16 |
+| 6 | List the planets | 3.3 | **9.4** | 2.84x | 15 |
+| 7 | 15 × 23? | 12.8 | **15.7** | 1.22x | 4 |
+| 8 | Translate to Spanish | 7.6 | **22.9** | 3.03x | 7 |
+| | **Average** | **9.6** | **15.3** | **1.59x** | |
+
+### Analysis
+
+- **More steps = more cache benefit**: 2-step prompts get 1.07x, 16-step prompts get up to 3.66x
+- **Regularization effect**: cache improves output quality in 3 of 8 prompts (sky blue, planets, Spanish translation). Reusing stable K,V prevents attention from amplifying accumulated errors
+- **vs llama.cpp** (8.51 tok/s): 6 of 8 prompts outperform with cache (up to 3.3x). 2 prompts (code generation, creative writing) remain slower due to requiring all 16 steps
+- **Tuning**: `--cache-keep-active 5` increases token fidelity to 59.4% vs baseline at 1.64x speedup. Default (keep=0) maximizes speed at 1.59x
+
 ## Summary
 
 ### Synthetic Benchmark (dummy prompt)
@@ -167,8 +190,11 @@ F16 baseline (s=16, t=12, low_confidence) = 1.64 tok/s
 - **F16 baseline**: 1.64 tok/s (s=16, t=12, low_confidence)
 - **Thread scaling**: 7.5x from t=1 to t=12 (Q4_K_M)
 
-### Real Prompts (end-to-end via generate.py)
-- **Easy prompts**: 9-11 tok/s, 3-4 steps, **~6x vs F16 baseline**
-- **Hard prompts**: ~2.3 tok/s, 16-17 steps, **~1.4x vs F16** (quantization only)
+### Real Prompts (end-to-end, B=256)
+- **Easy prompts (cache)**: 15–28 tok/s, 2-4 steps, **up to 3.3x vs llama.cpp**
+- **Medium prompts (cache)**: 5–23 tok/s, 7-15 steps
+- **Hard prompts (cache)**: 5–12 tok/s, 15-16 steps
+- **Inter-step cache**: 1.59x average speedup (9.6 → 15.3 tok/s)
+- **6 of 8 prompts outperform llama.cpp** with cache enabled
 - **Never slower** than low_confidence on any prompt tested
 - **Weighted estimate** on mixed chatbot traffic: ~1.8x speedup

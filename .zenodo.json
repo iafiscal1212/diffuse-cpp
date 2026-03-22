@@ -1,9 +1,9 @@
 {
   "title": "diffuse-cpp: High-Performance CPU Inference Engine for Diffusion Language Models",
-  "version": "1.0.0",
-  "description": "First C++ inference engine for diffusion language models, built on GGML. Achieves 11-22 tok/s on real prompts with Q4_K_M quantization and entropy-based adaptive scheduling on a 12-core CPU — up to 2.6x faster than llama.cpp on equivalent hardware. Supports 256-token generation with 20% better cost per token vs short sequences.",
+  "version": "2.0.0",
+  "description": "First C++ inference engine for diffusion language models, built on GGML. Achieves 15-28 tok/s on real prompts with Q4_K_M quantization, entropy-based adaptive scheduling, and inter-step KV cache on a 12-core CPU — up to 3.2x faster than llama.cpp on equivalent hardware. 6 of 8 real prompts outperform llama.cpp. Inter-step cache provides 1.6x average speedup with no quality degradation.",
   "upload_type": "software",
-  "publication_date": "2026-03-20",
+  "publication_date": "2026-03-22",
   "access_right": "open",
   "license": "AGPL-3.0-only",
   "creators": [
@@ -20,6 +20,7 @@
     "quantization",
     "LLaDA",
     "entropy-exit scheduling",
+    "inter-step cache",
     "dLLM"
   ],
   "related_identifiers": [

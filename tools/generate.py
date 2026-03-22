@@ -40,6 +40,12 @@ def main():
                         choices=["low_confidence", "random", "entropy_exit"])
     parser.add_argument("--entropy-threshold", type=float, default=1.5,
                         help="Entropy threshold for entropy_exit scheduler")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Disable inter-step KV cache")
+    parser.add_argument("--cache-refresh", type=int, default=0,
+                        help="Force full forward every N steps (default: 0 = never)")
+    parser.add_argument("--cache-keep-active", type=int, default=0,
+                        help="Keep recently-changed positions active N extra steps (default: 0)")
     parser.add_argument("--system", default="You are a helpful assistant.",
                         help="System prompt")
     parser.add_argument("--raw", action="store_true",
@@ -99,6 +105,13 @@ def main():
         "--remasking", args.remasking,
         "--entropy-threshold", str(args.entropy_threshold),
     ]
+
+    if args.no_cache:
+        cmd.append("--no-cache")
+    if args.cache_refresh > 0:
+        cmd.extend(["--cache-refresh", str(args.cache_refresh)])
+    if args.cache_keep_active > 0:
+        cmd.extend(["--cache-keep-active", str(args.cache_keep_active)])
 
     print(f"Running: {' '.join(cmd[:6])}...", file=sys.stderr)
 
