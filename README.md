@@ -2,7 +2,6 @@
 
 High-performance C++ inference engine for Diffusion Language Models, built on GGML.
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![GGML](https://img.shields.io/badge/GGML-v0.9.8-green.svg)](https://github.com/ggerganov/ggml)
 
@@ -311,10 +310,7 @@ Contributions welcome. Areas of interest:
 
 ## License
 
-AGPL-3.0. Commercial licenses available upon request.
-
-For commercial licensing inquiries, contact: caresment@gmail.com
-
+Copyright (c) 2024-2026 Carmen Esteban. All rights reserved. No part of this software may be copied, modified, distributed or used without express written permission.
 ## Citation
 
 If you use diffuse-cpp in your research, please cite:
