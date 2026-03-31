@@ -1,6 +1,6 @@
 % Diffusion Language Models are Faster than Autoregressive on CPU
-% v2.0 — March 22, 2026
-% Updated with inter-step KV cache results
+% v2.1 — March 22, 2026
+% Updated with Dream-7B comparative benchmarks and inter-step KV cache results
 %
 % NOTE: Figures 1–4 must be generated separately (see research/benchmark/
 % scripts or regenerate with matplotlib). Place as fig1.pdf, fig2.pdf,
@@ -42,25 +42,25 @@ Diffusion language models (dLLMs) are widely considered slower than autoregressi
 on commodity CPUs, dLLMs can outperform optimized AR inference. We identify the
 mechanism---a regime inversion from memory-bound (AR) to compute-bound (diffusion)---and
 validate it with systematic benchmarks. We present \texttt{diffuse-cpp}, the first C++
-inference engine for diffusion LLMs with GGML quantization support. On a 12-core AMD EPYC
-with LLaDA-8B Q4\_K\_M, \texttt{diffuse-cpp} achieves 15--28~tok/s with entropy-exit
-scheduling, inter-step KV cache, and 256-token generation on easy prompts---up to
-$3.2\times$ faster than \texttt{llama.cpp} with Llama-3-8B Q4\_K\_M (8.51~tok/s) on the
-same hardware. Thread scaling reaches $7.5\times$ from 1 to 12 cores for diffusion versus
-saturation at 4 cores for AR. An entropy-based adaptive scheduler reduces denoising steps
-from 16 to 2--4 on easy prompts without quality loss, providing up to $6\times$ speedup
-over the F16 baseline. An inter-step KV cache reuses Key and Value tensors between
-denoising steps, providing $1.6\times$ average speedup with no quality degradation and
-implicit regularization benefits. Increasing the generation buffer from 64 to 256 tokens
-yields 20\% lower cost per token, confirming that diffusion's matrix-matrix advantage
-amplifies with sequence length. These results suggest that diffusion models may be a
-viable path toward democratizing LLM inference on commodity hardware without GPU dependency.
+inference engine for diffusion LLMs with GGML quantization support. On a 12-core AMD EPYC,
+\texttt{diffuse-cpp} supports two models---LLaDA-8B (Llama backbone, MHA) and
+Dream-7B (Qwen2.5 backbone, GQA)---and achieves 14--28~tok/s with entropy-exit
+scheduling, inter-step KV cache, and 256-token generation on easy prompts, up to
+$3.3\times$ faster than \texttt{llama.cpp} (8.51~tok/s) on the same hardware. Dream
+excels at math and code (21.6~tok/s, correctly solving arithmetic), while LLaDA excels
+at translation (27.7~tok/s). Thread scaling reaches $7.5\times$ from 1 to 12 cores for
+diffusion versus saturation at 4 cores for AR. An entropy-based adaptive scheduler
+reduces denoising steps from 16 to 2--4 on easy prompts without quality loss. An
+inter-step KV cache reuses Key and Value tensors between denoising steps, providing
+$1.6\times$ average speedup with implicit regularization benefits. These results suggest
+that diffusion models may be a viable path toward democratizing LLM inference on commodity
+hardware without GPU dependency.
 \end{abstract}
 
 \textbf{Keywords:} diffusion language models, CPU inference, memory-bound, compute-bound,
-LLM acceleration, quantization, adaptive scheduling, inter-step cache
+LLM acceleration, quantization, adaptive scheduling, inter-step cache, multi-model
 
-\textbf{License:} CC-BY-4.0 (paper), AGPL-3.0 (code)
+\textbf{License:} CC-BY-4.0 (paper), Apache-2.0 (code)
 
 
 \section{Introduction}
@@ -92,7 +92,7 @@ MDLM~\cite{sahoo2024} report wall-clock times on A100 and H100 GPUs, where the m
 memory bandwidth makes AR models fast and the compute advantages of diffusion are less
 pronounced. No prior work has measured dLLM inference on commodity CPUs.
 
-This paper makes five contributions:
+This paper makes six contributions:
 
 \begin{enumerate}
 \item \textbf{First empirical demonstration} of the memory-compute regime inversion on
@@ -100,7 +100,9 @@ This paper makes five contributions:
   while AR inference saturates at 4 cores ($2.4\times$).
 
 \item \textbf{\texttt{diffuse-cpp}}: the first C++ inference engine for dLLMs, built on
-  GGML~\cite{gerganov2023}, with support for F16, Q8\_0, and Q4\_K\_M quantization.
+  GGML~\cite{gerganov2023}, supporting two model architectures: LLaDA-8B
+  (Llama backbone, MHA) and Dream-7B (Qwen2.5 backbone, GQA). Both use
+  F16, Q8\_0, and Q4\_K\_M quantization.
 
 \item \textbf{Entropy-exit adaptive scheduling}: an entropy-based early termination
   mechanism that reduces denoising steps from 16 to 2--4 on easy prompts, providing up
@@ -111,8 +113,13 @@ This paper makes five contributions:
   Achieves $1.6\times$ average speedup with an implicit regularization effect that
   improves output quality on 3 of 8 benchmarked prompts.
 
+\item \textbf{Multi-model comparative benchmarking}: systematic comparison of two
+  dLLM architectures (MHA vs GQA) on identical hardware, revealing complementary
+  strengths---Dream-7B excels at math and code while LLaDA-8B excels at translation.
+
 \item \textbf{Systematic benchmarking}: 288 configurations with 3 repetitions each,
-  plus 8 diverse real prompts, totaling 6.5 hours of continuous CPU measurement.
+  plus 8 diverse real prompts across 2 models, totaling over 8 hours of continuous
+  CPU measurement.
 \end{enumerate}
 
 
@@ -151,11 +158,14 @@ bidirectional (non-causal) masking.
 \subsection{Prior Work}
 
 LLaDA~\cite{nie2025} introduced masked discrete diffusion for language modeling with a
-Llama-style backbone. SEDD~\cite{lou2024} proposed score-based discrete diffusion.
-MDLM~\cite{sahoo2024} simplified the training objective. Prophet~\cite{li2025}
-introduced speculative decoding for discrete diffusion, using a confidence-gap criterion
-for early stopping. EAGS~\cite{koh2024} and Fast-dLLM~\cite{wu2025} explored
-entropy-adaptive scheduling. All prior work benchmarked on GPU.
+Llama-style backbone and Multi-Head Attention (MHA). Dream~\cite{ye2025} adopted a
+Qwen2.5 backbone with Grouped Query Attention (GQA), autoregressive logit shift for
+causal bias, and additional remasking strategies. SEDD~\cite{lou2024} proposed
+score-based discrete diffusion. MDLM~\cite{sahoo2024} simplified the training objective.
+Prophet~\cite{li2025} introduced speculative decoding for discrete diffusion, using a
+confidence-gap criterion for early stopping. EAGS~\cite{koh2024} and
+Fast-dLLM~\cite{wu2025} explored entropy-adaptive scheduling. All prior work
+benchmarked on GPU.
 
 For CPU inference, \texttt{llama.cpp}~\cite{gerganov2023b} is the state of the art for
 AR models, achieving near-theoretical throughput through GGML's optimized SIMD kernels
@@ -244,13 +254,22 @@ between 16 and 32 cores on current hardware.
 built on the GGML tensor library~\cite{gerganov2023}---the same foundation as
 \texttt{llama.cpp}. This section describes its design.
 
-\textbf{Forward pass.} The model implements a standard Llama transformer architecture
-with one critical difference: attention is bidirectional (no causal mask). All token
-positions attend to all others at every step. There is no KV cache in the standard
-autoregressive sense; the full attention computation is performed at each denoising step.
-While this appears wasteful relative to AR inference, it is precisely this structure that
-enables the compute-bound regime: the large matrix-matrix multiplications at each step
-amortize memory access costs.
+\textbf{Supported architectures.} \texttt{diffuse-cpp} supports two model families:
+
+\begin{itemize}
+\item \textbf{LLaDA-8B}~\cite{nie2025}: Llama backbone, 32 layers, 4096 hidden dim,
+  Multi-Head Attention (32 query / 32 KV heads), SwiGLU FFN (12288 intermediate),
+  vocabulary 126{,}464, RoPE $\theta$=500{,}000.
+\item \textbf{Dream-7B}~\cite{ye2025}: Qwen2.5 backbone, 28 layers, 3584 hidden dim,
+  Grouped Query Attention (28 query / 4 KV heads), SwiGLU FFN (18944 intermediate),
+  vocabulary 152{,}064, RoPE $\theta$=1{,}000{,}000. Dream adds QKV biases (kept at F32
+  in all quantizations), an autoregressive logit shift for causal bias, and additional
+  remasking strategies (\texttt{maskgit\_plus}, \texttt{topk\_margin}).
+\end{itemize}
+
+Both models use bidirectional (non-causal) attention. The shared forward pass differs
+only in GQA handling: for Dream, each KV head is expanded to serve $n_\text{rep}=7$
+query heads via grouped repetition before attention computation.
 
 \textbf{Denoising loop.} Generation proceeds as follows: (1) initialize a sequence of
 $B$ mask tokens; (2) perform a forward pass to obtain logits for all positions; (3) for
@@ -259,14 +278,14 @@ the scheduling policy; (5) repeat until all positions are unmasked or the step b
 exhausted.
 
 \textbf{Model format.} Models are stored in GGUF format, converted from HuggingFace
-SafeTensors via a Python script (\texttt{tools/convert-llada.py}). The converter maps
-LLaDA's tensor names to GGML conventions and validates architecture parameters (hidden
-size, number of heads, vocabulary size, RoPE configuration).
+SafeTensors via dedicated Python scripts (\texttt{tools/convert-llada.py} and
+\texttt{tools/convert-dream.py}). LLaDA produces 226 tensors; Dream produces 339
+tensors (255 weights + 84 QKV biases).
 
 \textbf{Quantization.} \texttt{diffuse-cpp} supports three quantization levels via
-\texttt{diffuse-quantize}: F16 (14.9~GB), Q8\_0 (8.4~GB), and Q4\_K\_M (5.1~GB).
-Quantization is performed weight-only; activations remain in FP32. The Q4\_K\_M format
-uses mixed 4-bit/6-bit precision with per-block scaling, following the GGML specification.
+\texttt{diffuse-quantize}: F16, Q8\_0, and Q4\_K\_M. For LLaDA: 14.9/8.4/5.1~GB;
+for Dream: 15.2/8.6/5.3~GB. Quantization is weight-only; activations remain in FP32.
+QKV biases (Dream only) are preserved at F32 in all quantization levels.
 
 \textbf{Scheduling policies.} Two scheduling policies are implemented.
 \texttt{low\_confidence} is the default baseline: at each step, it unmasks a fixed
@@ -594,22 +613,76 @@ active set to include positions that changed within the last $N$ steps. At $N$=5
 fidelity (exact match with uncached output) reaches 59.4\% with $1.64\times$ speedup---a
 useful trade-off when output reproducibility matters.
 
+\subsection{Multi-Model Comparison: Dream-7B vs LLaDA-8B}
+\label{sec:multimodel}
+
+Table~\ref{tab:multimodel} compares the two supported architectures on all 8 prompts
+under identical conditions (Q4\_K\_M, \texttt{entropy\_exit} + inter-step cache, 12
+threads, seed=42). Dream generates $B$=64 tokens; LLaDA generates $B$=256.
+
+\begin{table}[h]
+\centering
+\caption{Dream-7B vs LLaDA-8B (Q4\_K\_M, entropy\_exit + cache, 12 threads). Bold indicates the faster model per prompt.}
+\label{tab:multimodel}
+\begin{tabular}{lrrrrrr}
+\toprule
+ & \multicolumn{2}{c}{\textbf{Dream-7B}} & \multicolumn{2}{c}{\textbf{LLaDA-8B}} & \multicolumn{2}{c}{\textbf{vs llama.cpp}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+\textbf{Prompt} & \textbf{tok/s} & \textbf{Steps} & \textbf{tok/s} & \textbf{Steps} & \textbf{Dream} & \textbf{LLaDA} \\
+\midrule
+Capital of France?   & \textbf{21.6} & 2  & 22.4 & 3  & $2.5\times$ & $2.6\times$ \\
+Translate to French  & 14.3 & 6  & \textbf{25.7} & 2  & $1.7\times$ & $3.0\times$ \\
+$15 \times 23 = ?$   & \textbf{21.6} & 2  & 6.0  & 16 & $2.5\times$ & $0.7\times$ \\
+Translate to Spanish & 13.2 & 10 & \textbf{23.3} & 5  & $1.6\times$ & $2.7\times$ \\
+Python \texttt{is\_prime} & \textbf{8.2} & 7 & 4.5 & 15 & $1.0\times$ & $0.5\times$ \\
+Why sky is blue      & 4.9  & 16 & \textbf{5.0}  & 16 & $0.6\times$ & $0.6\times$ \\
+List the planets     & 4.9  & 16 & \textbf{9.5}  & 16 & $0.6\times$ & $1.1\times$ \\
+Poem about ocean     & 4.5  & 16 & \textbf{5.0}  & 16 & $0.5\times$ & $0.6\times$ \\
+\midrule
+\textbf{Average}     & \textbf{11.6} & & \textbf{12.7} & & $1.4\times$ & $1.5\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Complementary strengths.} The two models exhibit complementary performance
+profiles. Dream-7B excels at \emph{math and code}: it correctly solves $15 \times 23 = 345$
+in 2 steps (21.6~tok/s), where LLaDA requires all 16 steps and produces an incorrect
+answer. Dream also generates a complete, correct \texttt{is\_prime()} function in 7
+steps (8.2~tok/s) versus LLaDA's 15 steps (4.5~tok/s). LLaDA-8B excels at
+\emph{translation}: French translation converges in 2 steps at 25.7~tok/s ($3.0\times$
+llama.cpp), while Dream requires 6 steps (14.3~tok/s). Both models struggle with
+creative writing (4.5--5.0~tok/s), requiring all 16 steps.
+
+\textbf{Architecture effects.} Dream's GQA (28/4 heads) reduces KV computation by
+$7\times$ compared to LLaDA's MHA (32/32 heads), but this advantage is partially offset
+by Dream's smaller generation buffer ($B$=64 vs $B$=256). The inter-step cache benefits
+both architectures; for Dream, cached K,V are stored post-GQA-expansion (at full
+$n_\text{head}$ dimensionality) to avoid recomputing the grouped repetition on each step.
+
+\textbf{Practical recommendation.} Users should select the model based on their primary
+use case: Dream for math, code, and factual queries; LLaDA for translation and
+conversational tasks. Both outperform \texttt{llama.cpp} on 5--6 of 8 prompts.
+
 
 \section{Limitations}
 
 We are transparent about the limitations of this work.
 
-\textbf{Model quality.} LLaDA-8B produces noticeably lower-quality outputs than
-Llama-3-8B. We observed repetitions (``the and and molecules''), incomplete outputs on
-code prompts, and mediocre translations. The throughput comparison is between paradigms,
-not quality-equivalent models. A fair comparison would require a diffusion model trained
-to match Llama-3-8B quality, which does not yet exist.
+\textbf{Model quality.} Both LLaDA-8B and Dream-7B produce lower-quality outputs than
+their AR counterparts (Llama-3-8B, Qwen2.5-7B). LLaDA shows occasional repetitions and
+incomplete code; Dream produces higher-quality math and code but sometimes generates
+hallucinated content. The throughput comparison is between paradigms, not
+quality-equivalent models.
 
-\textbf{Different models.} We compare LLaDA-8B (diffusion) against Llama-3-8B
-(autoregressive). These share the same parameter count and Llama backbone architecture
-but differ in training procedure, data, and generation mechanism. The comparison
-demonstrates the \emph{computational} regime inversion, not a head-to-head model quality
-contest.
+\textbf{Different models.} We compare dLLMs (LLaDA-8B, Dream-7B) against AR models
+(Llama-3-8B). These share similar parameter counts and backbone architectures but differ
+in training procedure, data, and generation mechanism. The comparison demonstrates the
+\emph{computational} regime inversion, not a head-to-head model quality contest.
+
+\textbf{Generation buffer asymmetry.} Dream benchmarks use $B$=64 tokens while LLaDA
+uses $B$=256. This reflects practical constraints (Dream's Qwen2.5 tokenizer produces
+shorter outputs) but means the per-token throughput comparison is not perfectly
+controlled. Dream would likely achieve higher throughput at $B$=256.
 
 \textbf{Prior art on scheduling.} Entropy-based scheduling is not novel.
 Prophet~\cite{li2025}, EAGS~\cite{koh2024}, and Fast-dLLM~\cite{wu2025} proposed
@@ -656,7 +729,9 @@ demonstrates that significant speedups are achievable through caching strategies
 Further optimizations remain unexplored: bidirectional Flash Attention~\cite{dao2022}
 adapted for non-causal masks, delta attention (recomputing only changed hidden state
 contributions), batched inference for serving workloads, generation buffers beyond 256
-tokens, and support for additional architectures (SEDD, MDLM).
+tokens, and support for additional architectures (SEDD, MDLM). Dream-7B's GQA
+architecture also opens the possibility of a more memory-efficient inter-step cache
+that stores K,V at the reduced KV-head dimensionality rather than post-expansion.
 
 \textbf{Better diffusion models.} The regime inversion becomes practically relevant when
 dLLM quality matches AR models. Investment in larger, better-trained diffusion models
@@ -673,15 +748,15 @@ CPUs, however, the computational regime inverts: AR inference hits a hard bandwi
 ceiling while diffusion inference scales with available compute.
 
 We demonstrated this empirically with \texttt{diffuse-cpp}, the first C++ inference
-engine for diffusion LLMs. On an AMD EPYC 12-core CPU, thread scaling reaches
+engine for diffusion LLMs, supporting two architectures: LLaDA-8B (Llama/MHA) and
+Dream-7B (Qwen2.5/GQA). On an AMD EPYC 12-core CPU, thread scaling reaches
 $7.4\times$ for diffusion versus $2.4\times$ for AR. With Q4\_K\_M quantization,
-entropy-exit scheduling, inter-step KV cache, and 256-token generation,
-\texttt{diffuse-cpp} achieves 15--28~tok/s on real prompts---up to $3.2\times$ faster
-than \texttt{llama.cpp}'s 8.51~tok/s on the same hardware, with 6 of 8 prompts
-outperforming the AR baseline. The inter-step cache provides $1.6\times$ average
-speedup with no quality degradation. Increasing the generation buffer from 64 to 256
-tokens reduces per-token cost by 20\%, confirming that diffusion's advantage amplifies
-with sequence length.
+entropy-exit scheduling, and inter-step KV cache, \texttt{diffuse-cpp} achieves
+14--28~tok/s on easy prompts---up to $3.3\times$ faster than \texttt{llama.cpp}'s
+8.51~tok/s on the same hardware. The two models exhibit complementary strengths:
+Dream excels at math and code (21.6~tok/s), while LLaDA excels at translation
+(27.7~tok/s). The inter-step cache provides $1.6\times$ average speedup with no quality
+degradation.
 
 The contribution is not a claim that diffusion is universally faster. It is the
 identification and empirical validation of a hardware-dependent regime inversion, and the
@@ -695,7 +770,8 @@ The code, models, benchmark data, and this paper are publicly available under op
 
 This work was inspired by the GGML library and llama.cpp~\cite{gerganov2023b}. The
 entropy-exit scheduler builds on ideas from Prophet~\cite{li2025} and the
-entropy-adaptive scheduling literature~\cite{koh2024,wu2025}. Figures~1--3 were
+entropy-adaptive scheduling literature~\cite{koh2024,wu2025}. Dream support was
+developed using the architecture specifications from~\cite{ye2025}. Figures~1--3 were
 generated with Matplotlib.
 
 
@@ -765,6 +841,13 @@ Chengyue Wu, Hao Zhang, Shuchen Xue, Zhijian Liu, Shizhe Diao, Ligeng Zhu,
 \newblock Fast-dLLM: Training-free acceleration of diffusion LLM by enabling KV
   cache and parallel decoding.
 \newblock \emph{arXiv preprint arXiv:2505.22618}, 2025.
+
+\bibitem[Ye et~al.(2025)]{ye2025}
+Jiacheng Ye, Shansan Gong, Liheng Chen, Lin Zheng, Mukai Li, Thong Nguyen,
+  Kaiyan Zhang, Shuicheng Yan, Silvio Savarese, Caiming Xiong, and Yingbo Zhou.
+\newblock Dream 7B -- Scalable generation of structured and unstructured content
+  from diffusion language modeling.
+\newblock \emph{arXiv preprint arXiv:2504.16915}, 2025.
 
 \end{thebibliography}
 

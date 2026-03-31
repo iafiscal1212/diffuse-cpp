@@ -2,8 +2,11 @@
 
 High-performance C++ inference engine for Diffusion Language Models, built on GGML.
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![GGML](https://img.shields.io/badge/GGML-v0.9.8-green.svg)](https://github.com/ggerganov/ggml)
+[![Paper](https://img.shields.io/badge/Paper-Zenodo-blue.svg)](https://doi.org/10.5281/zenodo.19119814)
+[![Models](https://img.shields.io/badge/Models-HuggingFace-yellow.svg)](https://huggingface.co/diffuse-cpp)
 
 ## Highlights
 
@@ -161,8 +164,8 @@ Available quantization formats:
 |-------|-------------|---------------|--------|
 | [LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) | Llama, MHA (32/32) | [diffuse-cpp/LLaDA-8B-Instruct-GGUF](https://huggingface.co/diffuse-cpp/LLaDA-8B-Instruct-GGUF) | Production |
 | [Dream-v0-Instruct-7B](https://huggingface.co/Dream-org/Dream-v0-Instruct-7B) | Qwen2.5, GQA (28/4) | [diffuse-cpp/Dream-v0-Instruct-7B-GGUF](https://huggingface.co/diffuse-cpp/Dream-v0-Instruct-7B-GGUF) | Production |
-| SEDD | Score-based diffusion | — | Planned |
-| MDLM | Masked discrete diffusion | — | Planned |
+
+PRs welcome for additional masked diffusion architectures.
 
 ## How It Works
 
@@ -302,25 +305,37 @@ Current limitations:
 
 ## Contributing
 
-Contributions welcome. Areas of interest:
-- Additional model architectures
+Contributions welcome! This is the only C++ inference engine for diffusion LLMs — there's plenty of room to build.
+
+**High-impact areas:**
+- Additional masked diffusion model architectures
+- Integrated tokenizer (eliminate the Python pre-tokenization step)
+- Batched inference for serving workloads
+- GPU offloading via GGML (Metal, Vulkan, CUDA)
 - Improved scheduling heuristics
-- Tokenizer integration
-- Multi-query batching
+- Benchmarks on different hardware (Intel, ARM, Apple Silicon)
+
+**How to contribute:**
+1. Fork the repo and create a branch
+2. Make your changes with tests
+3. Open a PR with a clear description of what and why
 
 ## License
 
-Copyright (c) 2024-2026 Carmen Esteban. All rights reserved. No part of this software may be copied, modified, distributed or used without express written permission.
+Apache License 2.0. See [LICENSE](LICENSE) for details.
+
 ## Citation
 
 If you use diffuse-cpp in your research, please cite:
 
 ```bibtex
-@software{diffuse_cpp_2026,
-  title={diffuse-cpp: High-Performance Inference for Diffusion Language Models},
-  author={Carmen Estévez},
+@article{esteban2026diffuse,
+  title={Diffusion Language Models are Faster than Autoregressive on CPU:
+         An Empirical Study of the Memory-Compute Regime Inversion},
+  author={Carmen Esteban},
   year={2026},
-  url={https://github.com/iafiscal1212/diffuse-cpp}
+  doi={10.5281/zenodo.19119814},
+  url={https://doi.org/10.5281/zenodo.19119814}
 }
 ```
 
