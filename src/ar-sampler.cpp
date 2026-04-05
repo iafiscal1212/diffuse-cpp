@@ -168,7 +168,7 @@ std::vector<int32_t> ar_generate(
         cache.threadpool = ggml_threadpool_new(&tparams);
         if (cache.threadpool) {
             DIFFUSE_LOG("  threadpool: %d threads (persistent, high priority)",
-                        ggml_threadpool_get_n_threads(cache.threadpool));
+                        ctx->n_threads);
         }
     }
 

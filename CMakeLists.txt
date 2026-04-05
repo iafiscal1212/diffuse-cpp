@@ -27,7 +27,7 @@ target_include_directories(diffuse PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(diffuse PUBLIC ggml)
+target_link_libraries(diffuse PUBLIC ggml ggml-cpu)
 
 # ── CLI tools ───────────────────────────────────────────────────
 if(DIFFUSE_BUILD_TOOLS)
