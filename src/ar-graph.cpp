@@ -353,3 +353,21 @@ bool ar_forward_decode(
 
     return ar_forward_impl(ctx, &token, 1, cache, logits_out);
 }
+
+// ── Public API: Batch forward (no cache reset) ──────────────────
+// Used by speculative decoding to verify K candidate tokens at once.
+bool ar_forward_batch(
+        diffuse_context * ctx,
+        const int32_t * tokens,
+        int n_tokens,
+        ar_kv_cache * cache,
+        float * logits_out) {
+
+    if (!cache || !cache->initialized) {
+        DIFFUSE_LOG("ar_forward_batch: cache not initialized");
+        return false;
+    }
+
+    DIFFUSE_LOG("ar_forward_batch: %d tokens, n_past=%d", n_tokens, cache->n_past);
+    return ar_forward_impl(ctx, tokens, n_tokens, cache, logits_out);
+}

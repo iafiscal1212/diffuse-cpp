@@ -27,3 +27,13 @@ bool ar_forward_decode(
     int32_t token,
     ar_kv_cache * cache,
     float * logits_out);
+
+// Batch: process N tokens with existing KV cache (no reset).
+// Used for speculative decoding verification: target verifies K draft tokens at once.
+// tokens: [n_tokens], logits_out: [n_tokens * n_vocab]
+bool ar_forward_batch(
+    diffuse_context * ctx,
+    const int32_t * tokens,
+    int n_tokens,
+    ar_kv_cache * cache,
+    float * logits_out);

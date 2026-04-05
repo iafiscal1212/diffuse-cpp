@@ -115,4 +115,41 @@ std::vector<int32_t> ar_generate(
     const ar_sampler_params & params,
     ar_token_callback callback = nullptr);
 
+// ═══════════════════════════════════════════════════════════════
+// ── Speculative Decoding API ────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+struct ar_spec_params {
+    int K = 4;   // speculative lookahead (draft tokens per round)
+};
+
+struct ar_spec_stats {
+    int total_draft_tokens  = 0;
+    int total_accepted      = 0;
+    int total_generated     = 0;
+    int total_target_batches = 0;
+    int total_target_decodes = 0;
+    int total_fast_rejects   = 0;
+    double prefill_ms = 0;
+    double decode_ms  = 0;
+
+    float acceptance_rate() const {
+        return total_draft_tokens > 0
+            ? (float)total_accepted / total_draft_tokens : 0.0f;
+    }
+    float tokens_per_target_call() const {
+        int calls = total_target_batches + total_target_decodes;
+        return calls > 0 ? (float)total_generated / calls : 1.0f;
+    }
+};
+
+std::vector<int32_t> ar_speculative_generate(
+    diffuse_context * target_ctx,
+    diffuse_context * draft_ctx,
+    const std::vector<int32_t> & prompt_tokens,
+    int max_tokens,
+    const ar_spec_params & params,
+    ar_token_callback callback = nullptr,
+    ar_spec_stats * stats_out = nullptr);
+
 // end of diffuse.h

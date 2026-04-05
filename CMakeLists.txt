@@ -22,6 +22,7 @@ add_library(diffuse
     src/diffuse-sampler.cpp
     src/ar-graph.cpp
     src/ar-sampler.cpp
+    src/ar-speculative.cpp
 )
 target_include_directories(diffuse PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
