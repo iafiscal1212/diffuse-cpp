@@ -185,14 +185,24 @@ std::vector<int32_t> ar_generate(
     double decode_ms  = 0.0;
     int n_decoded = 0;
 
+    // Set sliding window if configured
+    cache.sliding_window = params.sliding_window;
+
     // ── Phase 1: Prefill (process all prompt tokens) ─────────────
     {
         auto t0 = clk::now();
         logits.resize((size_t)prompt_len * n_vocab);
 
-        if (!ar_forward_prefill(ctx, prompt_tokens.data(), prompt_len,
-                                &cache, logits.data())) {
-            DIFFUSE_DIE("ar_generate: prefill failed");
+        if (params.layer_skip > 0) {
+            if (!ar_profile_layers(ctx, prompt_tokens.data(), prompt_len,
+                                   &cache, logits.data(), params.layer_skip)) {
+                DIFFUSE_DIE("ar_generate: profile prefill failed");
+            }
+        } else {
+            if (!ar_forward_prefill(ctx, prompt_tokens.data(), prompt_len,
+                                    &cache, logits.data())) {
+                DIFFUSE_DIE("ar_generate: prefill failed");
+            }
         }
 
         auto t1 = clk::now();

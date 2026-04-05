@@ -1,5 +1,9 @@
 #include "ar-graph.h"
 
+#include <algorithm>
+#include <vector>
+#include <utility>
+
 // ── Helper: ensure tensor is F32 (for bias add after quantization) ──
 static struct ggml_tensor * ensure_f32(struct ggml_context * ctx, struct ggml_tensor * t) {
     if (!t) return nullptr;
@@ -25,7 +29,8 @@ static struct ggml_cgraph * ar_build_graph(
         const int32_t * tokens,
         int n_new,
         int n_past,
-        ar_kv_cache * cache) {
+        ar_kv_cache * cache,
+        bool profile = false) {
 
     const auto & model = *dctx->model;
     const auto & hp    = model.hparams;
@@ -67,10 +72,13 @@ static struct ggml_cgraph * ar_build_graph(
         ggml_fp16_t * mask_data = (ggml_fp16_t *)attn_mask->data;
         const ggml_fp16_t zero_f16 = ggml_fp32_to_fp16(0.0f);
         const ggml_fp16_t ninf_f16 = ggml_fp32_to_fp16(-INFINITY);
+        const int sw = (cache && cache->sliding_window > 0) ? cache->sliding_window : 0;
         for (int q = 0; q < n_new; q++) {
             int q_abs = n_past + q;
             for (int k = 0; k < n_kv; k++) {
-                mask_data[q * n_kv + k] = (k <= q_abs) ? zero_f16 : ninf_f16;
+                bool visible = (k <= q_abs);
+                if (sw > 0 && q_abs - k >= sw) visible = false;
+                mask_data[q * n_kv + k] = visible ? zero_f16 : ninf_f16;
             }
         }
     }
@@ -80,6 +88,14 @@ static struct ggml_cgraph * ar_build_graph(
 
     // ── Transformer layers ───────────────────────────────────────
     for (int il = 0; il < n_layer; il++) {
+        // Layer skip (VSIDS-inspired): skip least important layers during decode
+        if (cache && !cache->skip_layers.empty() &&
+            (size_t)il < cache->skip_layers.size() && cache->skip_layers[il]) {
+            continue;
+        }
+
+        struct ggml_tensor * layer_input = profile ? cur : nullptr;
+
         const auto & layer = model.layers[il];
         struct ggml_tensor * residual = cur;
 
@@ -200,6 +216,17 @@ static struct ggml_cgraph * ar_build_graph(
         cur  = ggml_mul_mat(ctx, layer.ffn_down, cur);
 
         cur = ggml_add(ctx, cur, residual);
+
+        // Layer importance profiling: ||layer_output - layer_input||²
+        // Used to identify least important layers for skip during decode
+        if (profile && layer_input) {
+            struct ggml_tensor * delta = ggml_sub(ctx, cur, layer_input);
+            struct ggml_tensor * dsq = ggml_sum(ctx, ggml_sqr(ctx, delta));
+            char name_buf[32];
+            snprintf(name_buf, sizeof(name_buf), "limp.%02d", il);
+            ggml_set_name(dsq, name_buf);
+            ggml_set_output(dsq);
+        }
     }
 
     // ── Final norm + logits ──────────────────────────────────────
@@ -225,7 +252,8 @@ static bool ar_forward_impl(
         const int32_t * tokens,
         int n_new,
         ar_kv_cache * cache,
-        float * logits_out) {
+        float * logits_out,
+        bool profile = false) {
 
     const auto & hp = ctx->model->hparams;
     const int n_past = cache->n_past;
@@ -252,6 +280,11 @@ static bool ar_forward_impl(
     buf_size += (size_t)n_kv * n_new * sizeof(ggml_fp16_t);
     buf_size += n_new * sizeof(int32_t) * 2;
 
+    // Profile mode: extra tensors (sub + sqr per layer, ~2 * n_embd * n_new each)
+    if (profile) {
+        buf_size += (size_t)hp.n_layer * hp.n_embd * n_new * sizeof(float) * 2;
+    }
+
     // Graph metadata overhead
     buf_size += 256ull * 1024 * 1024;
     buf_size = (size_t)(buf_size * 1.2);
@@ -272,7 +305,7 @@ static bool ar_forward_impl(
     }
 
     struct ggml_cgraph * gf = ar_build_graph(ctx, ctx_compute, tokens,
-                                              n_new, n_past, cache);
+                                              n_new, n_past, cache, profile);
 
     // Use persistent threadpool + work buffer for graph compute
     struct ggml_cplan plan = ggml_graph_plan(gf, ctx->n_threads, cache->threadpool);
@@ -310,12 +343,27 @@ static bool ar_forward_impl(
             if (K_t && V_t) {
                 cache->append(il, (const float *)K_t->data,
                                   (const float *)V_t->data, n_new);
-            } else {
+            } else if (cache->skip_layers.empty() ||
+                       (size_t)il >= cache->skip_layers.size() ||
+                       !cache->skip_layers[il]) {
                 DIFFUSE_LOG("WARNING: could not extract K/V for layer %d", il);
             }
+            // Skipped layers produce no K/V — expected
         }
     }
     cache->advance(n_new);
+
+    // Extract layer impact scores if profiling
+    if (profile) {
+        const int n_lay = (int)hp.n_layer;
+        cache->layer_impact.resize(n_lay, 0.0f);
+        char name_buf[32];
+        for (int il = 0; il < n_lay; il++) {
+            snprintf(name_buf, sizeof(name_buf), "limp.%02d", il);
+            struct ggml_tensor * imp_t = ggml_graph_get_tensor(gf, name_buf);
+            cache->layer_impact[il] = imp_t ? *(float *)imp_t->data : 0.0f;
+        }
+    }
 
     ggml_free(ctx_compute);
     return true;
@@ -370,4 +418,79 @@ bool ar_forward_batch(
 
     DIFFUSE_LOG("ar_forward_batch: %d tokens, n_past=%d", n_tokens, cache->n_past);
     return ar_forward_impl(ctx, tokens, n_tokens, cache, logits_out);
+}
+
+// ── Public API: Profile layers and configure skip mask ──────────
+//
+// VSIDS-inspired optimization: profile per-layer importance during prefill,
+// then skip the N least important layers during decode to save bandwidth.
+//
+// For Qwen2.5-32B (64 layers, ~244 MB/layer): skipping 6 layers saves
+// ~1.5 GB of weight reads per decode step (~5% bandwidth reduction).
+//
+// Importance metric: ||layer_output - layer_input||² (sum of squared delta).
+// Layers with smallest delta contribute least to the representation.
+// First and last 2 layers are always protected (never skipped).
+//
+bool ar_profile_layers(
+        diffuse_context * ctx,
+        const int32_t * tokens,
+        int n_tokens,
+        ar_kv_cache * cache,
+        float * logits_out,
+        int n_skip) {
+
+    if (!cache || !cache->initialized) {
+        DIFFUSE_LOG("ar_profile_layers: cache not initialized");
+        return false;
+    }
+
+    const int n_layer = (int)ctx->model->hparams.n_layer;
+
+    // Clear any existing skip mask (profile with all layers active)
+    cache->skip_layers.clear();
+    cache->reset();
+
+    DIFFUSE_LOG("ar_profile_layers: %d tokens, target skip=%d/%d layers",
+                n_tokens, n_skip, n_layer);
+
+    // Run prefill with profiling enabled
+    if (!ar_forward_impl(ctx, tokens, n_tokens, cache, logits_out, /*profile=*/true)) {
+        DIFFUSE_LOG("ar_profile_layers: prefill failed");
+        return false;
+    }
+
+    // Select layers to skip based on impact scores
+    if (n_skip > 0 && !cache->layer_impact.empty()) {
+        // Rank layers by impact (ascending = least important first)
+        std::vector<std::pair<float, int>> ranked;
+        ranked.reserve(n_layer);
+        for (int il = 0; il < n_layer; il++) {
+            ranked.push_back({cache->layer_impact[il], il});
+        }
+        std::sort(ranked.begin(), ranked.end());
+
+        // Report top/bottom layer impacts
+        DIFFUSE_LOG("  lowest impact layers:");
+        for (int i = 0; i < std::min(n_skip + 4, n_layer); i++) {
+            DIFFUSE_LOG("    layer %2d: impact = %.2f%s",
+                        ranked[i].second, ranked[i].first,
+                        (ranked[i].second < 2 || ranked[i].second >= n_layer - 2)
+                            ? " [PROTECTED]" : "");
+        }
+
+        // Skip the N least impactful, protecting first/last 2 layers
+        cache->skip_layers.resize(n_layer, false);
+        int skipped = 0;
+        for (auto & [imp, il] : ranked) {
+            if (skipped >= n_skip) break;
+            if (il < 2 || il >= n_layer - 2) continue;
+            cache->skip_layers[il] = true;
+            skipped++;
+        }
+
+        DIFFUSE_LOG("  layer-skip: %d/%d layers skipped during decode", skipped, n_layer);
+    }
+
+    return true;
 }

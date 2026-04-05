@@ -30,6 +30,9 @@ static void print_usage(const char * prog) {
     fprintf(stderr, "  --draft PATH  Draft model GGUF (enables speculative decoding)\n");
     fprintf(stderr, "  --spec-k INT  Speculative lookahead (default: 4)\n");
     fprintf(stderr, "  --draft-threads INT  Threads for draft model (default: 4)\n");
+    fprintf(stderr, "\nOptimizations:\n");
+    fprintf(stderr, "  --layer-skip INT     Skip N least important layers during decode (default: 0)\n");
+    fprintf(stderr, "  --sliding-window INT Attend only last W tokens (default: 0 = full context)\n");
     fprintf(stderr, "\nExample:\n");
     fprintf(stderr, "  %s -m thrombia-32b-q4.gguf --tokens 151644,8948,198,... -n 512 -t 12\n", prog);
     fprintf(stderr, "  %s -m thrombia-32b-q4.gguf --draft qwen2.5-0.5b-q4.gguf --spec-k 5 -t 12\n", prog);
@@ -55,6 +58,8 @@ int main(int argc, char ** argv) {
     int n_threads  = 4;
     int draft_threads = 4;
     int spec_k = 4;
+    int layer_skip = 0;
+    int sliding_window = 0;
     float temperature = 0.0f;
     float top_p = 0.9f;
     int top_k = 40;
@@ -92,6 +97,10 @@ int main(int argc, char ** argv) {
             seed = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tokens") == 0 && i + 1 < argc) {
             input_tokens = parse_tokens(argv[++i]);
+        } else if (strcmp(argv[i], "--layer-skip") == 0 && i + 1 < argc) {
+            layer_skip = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--sliding-window") == 0 && i + 1 < argc) {
+            sliding_window = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--bind-cores") == 0) {
             bind_cores = true;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -172,6 +181,8 @@ int main(int argc, char ** argv) {
 
         ar_spec_params sparams;
         sparams.K = spec_k;
+        sparams.layer_skip = layer_skip;
+        sparams.sliding_window = sliding_window;
 
         ar_spec_stats stats;
 
@@ -228,6 +239,8 @@ int main(int argc, char ** argv) {
     sparams.repeat_penalty = repeat_penalty;
     sparams.repeat_last_n  = repeat_last_n;
     sparams.seed           = seed;
+    sparams.layer_skip     = layer_skip;
+    sparams.sliding_window = sliding_window;
 
     // Generate with streaming output
     fprintf(stderr, "Generating (greedy=%s, temp=%.2f, top_p=%.2f, top_k=%d)...\n",

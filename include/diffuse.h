@@ -102,6 +102,8 @@ struct ar_sampler_params {
     float    repeat_penalty = 1.1f;   // repetition penalty
     int      repeat_last_n  = 64;     // window for repeat penalty
     uint32_t seed           = 42;
+    int      layer_skip     = 0;      // skip N least important layers (0 = disabled)
+    int      sliding_window = 0;      // attend last W positions only (0 = full)
 };
 
 // ── AR token callback (return false to stop) ──────────────────
@@ -120,7 +122,9 @@ std::vector<int32_t> ar_generate(
 // ═══════════════════════════════════════════════════════════════
 
 struct ar_spec_params {
-    int K = 5;   // speculative lookahead (draft tokens per round)
+    int K = 5;              // speculative lookahead (draft tokens per round)
+    int layer_skip = 0;     // skip N least important target layers (0 = disabled)
+    int sliding_window = 0; // attend last W positions only (0 = full)
 };
 
 struct ar_spec_stats {

@@ -28,6 +28,11 @@ struct ar_kv_cache {
     int n_embd_head = 0;
     int n_head_kv   = 0;   // KV heads (8 for Qwen2.5-32B, not expanded)
 
+    // ── Layer skip / optimization (VSIDS-inspired) ──────────────
+    std::vector<bool> skip_layers;       // [n_layer] true = skip during decode
+    std::vector<float> layer_impact;     // [n_layer] profiled impact scores
+    int sliding_window = 0;              // 0 = full context, >0 = attend last W positions
+
     // Per-layer K and V arrays
     // Shape per layer: [n_ctx_max * n_head_kv * n_embd_head]
     // Access pattern: cache[layer][pos * stride ... (pos+1) * stride]
@@ -67,7 +72,10 @@ struct ar_kv_cache {
     void clear() {
         K.clear();
         V.clear();
+        skip_layers.clear();
+        layer_impact.clear();
         n_past = 0;
+        sliding_window = 0;
         initialized = false;
         free_compute_resources();
     }

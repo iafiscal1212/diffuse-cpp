@@ -37,3 +37,14 @@ bool ar_forward_batch(
     int n_tokens,
     ar_kv_cache * cache,
     float * logits_out);
+
+// Profile layer importance and configure skip mask (VSIDS-inspired).
+// Runs prefill with profiling, selects n_skip least important layers to skip.
+// Results stored in cache->skip_layers (used by all subsequent forward calls).
+bool ar_profile_layers(
+    diffuse_context * ctx,
+    const int32_t * tokens,
+    int n_tokens,
+    ar_kv_cache * cache,
+    float * logits_out,
+    int n_skip);

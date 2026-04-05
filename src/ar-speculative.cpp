@@ -97,16 +97,30 @@ std::vector<int32_t> ar_speculative_generate(
     using clk = std::chrono::steady_clock;
     auto gen_start = clk::now();
 
+    // Set sliding window on target cache if configured
+    target_cache.sliding_window = params.sliding_window;
+
     // ── Prefill both models ─────────────────────────────────────
     std::vector<float> t_prefill_logits((size_t)prompt_len * t_vocab);
     {
         std::vector<float> d_prefill_logits((size_t)prompt_len * d_vocab);
 
         auto t0 = clk::now();
-        if (!ar_forward_prefill(target_ctx, prompt_tokens.data(), prompt_len,
-                                &target_cache, t_prefill_logits.data())) {
-            DIFFUSE_DIE("speculative: target prefill failed");
+
+        // Target prefill: optionally profile and set layer skip mask
+        if (params.layer_skip > 0) {
+            if (!ar_profile_layers(target_ctx, prompt_tokens.data(), prompt_len,
+                                   &target_cache, t_prefill_logits.data(),
+                                   params.layer_skip)) {
+                DIFFUSE_DIE("speculative: target profile prefill failed");
+            }
+        } else {
+            if (!ar_forward_prefill(target_ctx, prompt_tokens.data(), prompt_len,
+                                    &target_cache, t_prefill_logits.data())) {
+                DIFFUSE_DIE("speculative: target prefill failed");
+            }
         }
+
         if (!ar_forward_prefill(draft_ctx, prompt_tokens.data(), prompt_len,
                                 &draft_cache, d_prefill_logits.data())) {
             DIFFUSE_DIE("speculative: draft prefill failed");
