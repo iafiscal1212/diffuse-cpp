@@ -27,7 +27,23 @@ static bool is_eos_token(int32_t token) {
     return token == 151643 || token == 151645 || token == 151644;
 }
 
-// ── Speculative Generation ──────────────────────────────────────
+// ── Speculative Generation with Deferred Bonus ──────────────────
+//
+// Key optimization: instead of decoding the bonus token on the target
+// as a separate forward pass (~540ms for bandwidth-bound 32B model),
+// we defer it to the NEXT iteration's batch. Each batch is:
+//
+//   [pending_bonus, draft_d1, draft_d2, ..., draft_dK]   (K+1 tokens)
+//
+// The causal mask ensures batch_logits[0] depends only on context +
+// pending (not on d1..dK), so verification is correct.
+//
+// This eliminates 1 target forward per iteration:
+//   Before: 1 batch + 1 decode = 2 forwards per iteration
+//   After:  1 batch = 1 forward per iteration
+//
+// The target and draft caches stay 1 position apart (draft has the
+// pending token decoded, target doesn't until the next batch).
 
 std::vector<int32_t> ar_speculative_generate(
         diffuse_context * target_ctx,
@@ -84,8 +100,6 @@ std::vector<int32_t> ar_speculative_generate(
     // ── Prefill both models ─────────────────────────────────────
     std::vector<float> t_prefill_logits((size_t)prompt_len * t_vocab);
     {
-        // We only need the draft prefill to populate its KV cache, not the logits.
-        // But ar_forward_prefill requires a logits buffer, so allocate a temp one.
         std::vector<float> d_prefill_logits((size_t)prompt_len * d_vocab);
 
         auto t0 = clk::now();
@@ -108,15 +122,13 @@ std::vector<int32_t> ar_speculative_generate(
     std::vector<int32_t> generated;
     generated.reserve(max_tokens);
 
-    std::vector<float> prev_target_logits(
-        t_prefill_logits.data() + (size_t)(prompt_len - 1) * t_vocab,
-        t_prefill_logits.data() + (size_t)prompt_len * t_vocab);
+    int32_t first_token = argmax(
+        t_prefill_logits.data() + (size_t)(prompt_len - 1) * t_vocab, t_vocab);
 
-    // Free prefill buffer (large: prompt_len * vocab * 4 bytes)
+    // Free prefill buffer
     t_prefill_logits.clear();
     t_prefill_logits.shrink_to_fit();
 
-    int32_t first_token = argmax(prev_target_logits.data(), t_vocab);
     generated.push_back(first_token);
     stats.total_generated++;
 
@@ -128,24 +140,23 @@ std::vector<int32_t> ar_speculative_generate(
         goto cleanup;
     }
 
-    // ── Decode first token on both models to sync caches ────────
+    // ── Deferred bonus: DON'T decode first_token on target ──────
+    // Instead, set it as pending and include it in the first batch.
+    // This saves one target forward (~540ms for 32B).
+    //
+    // Only decode on draft (fast, ~12ms) to get prev_draft_logits.
     {
-        std::vector<float> t_logits(t_vocab);
-        if (!ar_forward_decode(target_ctx, first_token,
-                               &target_cache, t_logits.data())) {
-            DIFFUSE_DIE("speculative: target decode first token failed");
-        }
-        prev_target_logits.assign(t_logits.begin(), t_logits.end());
-        stats.total_target_decodes++;
-    }
-
-    {
-        // Persistent buffer for draft logits (reused across iterations)
         std::vector<float> prev_draft_logits(d_vocab);
         if (!ar_forward_decode(draft_ctx, first_token,
                                &draft_cache, prev_draft_logits.data())) {
             DIFFUSE_DIE("speculative: draft decode first token failed");
         }
+        // State:
+        //   target_cache.n_past = prompt_len      (first_token NOT decoded)
+        //   draft_cache.n_past  = prompt_len + 1  (first_token decoded)
+        //   pending = first_token
+
+        int32_t pending = first_token;
 
         // ── Main speculative loop ───────────────────────────────
         auto decode_start = clk::now();
@@ -153,19 +164,21 @@ std::vector<int32_t> ar_speculative_generate(
         std::vector<float> draft_logits_buf(d_vocab);
         std::vector<float> target_batch_logits;
         std::vector<int32_t> candidates;
+        std::vector<int32_t> batch_tokens;
         candidates.reserve(K);
+        batch_tokens.reserve(K + 1);
 
         while ((int)generated.size() < max_tokens) {
             int remaining = max_tokens - (int)generated.size();
             int k = std::min(K, remaining);
 
             int target_P = target_cache.n_past;
-            int draft_P  = draft_cache.n_past;
+            // Invariant: draft_cache.n_past == target_P + 1
 
             // ── Phase 1: Draft generates k candidates ───────────
             candidates.clear();
             {
-                // First candidate from prev_draft_logits (no decode needed)
+                // First candidate from prev_draft_logits
                 candidates.push_back(argmax(prev_draft_logits.data(), d_vocab));
 
                 // Remaining: decode on draft and sample
@@ -179,61 +192,68 @@ std::vector<int32_t> ar_speculative_generate(
                 }
                 stats.total_draft_tokens += k;
             }
-            // draft_cache.n_past = draft_P + (k - 1)
-            // Positions draft_P .. draft_P+k-2 have KV for candidates[0..k-2]
+            // draft_cache.n_past = (target_P + 1) + (k - 1) = target_P + k
 
-            // ── Phase 2: Target verification ────────────────────
+            // ── Phase 2: Target batch [pending, d1..dk] ─────────
+            //
+            // K+1 tokens total. Logits layout:
+            //   batch_logits[0]: after pending    → verify d1
+            //   batch_logits[1]: after d1         → verify d2
+            //   ...
+            //   batch_logits[k]: after dk         → bonus if all accepted
+            //
+            // Causal mask ensures batch_logits[i] depends only on
+            // context + pending + d1..di (not future draft tokens).
+            {
+                batch_tokens.clear();
+                batch_tokens.push_back(pending);
+                batch_tokens.insert(batch_tokens.end(),
+                                    candidates.begin(), candidates.end());
+
+                int batch_size = 1 + k;
+                target_batch_logits.resize((size_t)batch_size * t_vocab);
+
+                if (!ar_forward_batch(target_ctx, batch_tokens.data(), batch_size,
+                                      &target_cache, target_batch_logits.data())) {
+                    DIFFUSE_LOG("speculative: target batch failed");
+                    goto loop_done;
+                }
+                stats.total_target_batches++;
+                // target_cache.n_past = target_P + batch_size = target_P + 1 + k
+            }
+
+            // ── Phase 3: Verify candidates ──────────────────────
             {
                 int n_accepted = 0;
-                int32_t bonus;
 
-                int32_t target_predicted = argmax(prev_target_logits.data(), t_vocab);
-
-                if (target_predicted != candidates[0]) {
-                    // ── Fast path: d1 rejected, skip expensive batch ──
-                    bonus = target_predicted;
-                    n_accepted = 0;
-                    stats.total_fast_rejects++;
-                } else {
-                    // d1 accepted — batch verify all k candidates
-                    target_batch_logits.resize((size_t)k * t_vocab);
-                    if (!ar_forward_batch(target_ctx, candidates.data(), k,
-                                          &target_cache, target_batch_logits.data())) {
-                        DIFFUSE_LOG("speculative: target batch failed");
-                        goto loop_done;
-                    }
-                    stats.total_target_batches++;
-                    // target_cache.n_past = target_P + k
-
-                    n_accepted = 1;
-                    for (int i = 1; i < k; i++) {
-                        float * bl = target_batch_logits.data()
-                                   + (size_t)(i - 1) * t_vocab;
-                        if (argmax(bl, t_vocab) == candidates[i]) {
-                            n_accepted++;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    // Determine bonus from target logits
-                    if (n_accepted < k) {
-                        bonus = argmax(
-                            target_batch_logits.data()
-                                + (size_t)(n_accepted - 1) * t_vocab,
-                            t_vocab);
+                // Verify d_i against batch_logits[i-1]
+                //   batch_logits[0] = after pending → predicts d1
+                //   batch_logits[1] = after d1      → predicts d2
+                //   ...
+                for (int i = 0; i < k; i++) {
+                    float * bl = target_batch_logits.data()
+                               + (size_t)i * t_vocab;
+                    if (argmax(bl, t_vocab) == candidates[i]) {
+                        n_accepted++;
                     } else {
-                        bonus = argmax(
-                            target_batch_logits.data()
-                                + (size_t)(k - 1) * t_vocab,
-                            t_vocab);
+                        break;
                     }
-
-                    // Rollback target cache to accepted prefix
-                    target_cache.n_past = target_P + n_accepted;
                 }
 
+                // Bonus: target's prediction after the last accepted token
+                //   n_accepted=0 → bonus from batch_logits[0] (after pending)
+                //   n_accepted=J → bonus from batch_logits[J] (after d_J)
+                //   n_accepted=k → bonus from batch_logits[k] (after d_k)
+                int32_t bonus = argmax(
+                    target_batch_logits.data() + (size_t)n_accepted * t_vocab,
+                    t_vocab);
+
                 stats.total_accepted += n_accepted;
+                if (n_accepted == 0) stats.total_fast_rejects++;
+
+                // Rollback target: keep pending + accepted candidates
+                // target was at target_P + 1 + k, we want target_P + 1 + n_accepted
+                target_cache.n_past = target_P + 1 + n_accepted;
 
                 // ── Output accepted tokens ──────────────────────
                 for (int i = 0; i < n_accepted; i++) {
@@ -249,7 +269,7 @@ std::vector<int32_t> ar_speculative_generate(
                     }
                 }
 
-                // ── Output bonus token ──────────────────────────
+                // ── Output bonus ────────────────────────────────
                 if ((int)generated.size() < max_tokens) {
                     generated.push_back(bonus);
                     stats.total_generated++;
@@ -262,33 +282,24 @@ std::vector<int32_t> ar_speculative_generate(
                     }
                 }
 
-                // ── Sync target: decode bonus ───────────────────
-                {
-                    std::vector<float> t_logits(t_vocab);
-                    if (!ar_forward_decode(target_ctx, bonus,
-                                           &target_cache, t_logits.data())) {
-                        DIFFUSE_LOG("speculative: target decode bonus failed");
-                        goto loop_done;
-                    }
-                    prev_target_logits.assign(t_logits.begin(), t_logits.end());
-                    stats.total_target_decodes++;
-                }
-
                 // ── Sync draft: rollback + decode bonus ─────────
                 //
-                // Draft decoded k-1 times → n_past = draft_P + k - 1
-                // We need n_past = draft_P + n_accepted, then decode bonus.
+                // draft was at target_P + k (from generating k-1 decodes)
+                // target is now at target_P + 1 + n_accepted
+                // We need draft at target_P + 1 + n_accepted,
+                // then decode bonus → draft at target_P + 2 + n_accepted
                 //
-                // Cases:
-                //   n_accepted < k-1  → rollback (set n_past lower)
-                //   n_accepted == k-1 → already correct
-                //   n_accepted == k   → need one more decode (candidates[k-1])
+                // delta = (target_P + k) - (target_P + 1 + n_accepted)
+                //       = k - 1 - n_accepted
+                //
+                //   k-1-n > 0: rollback draft
+                //   k-1-n = 0: nothing
+                //   k-1-n < 0: advance (decode candidates[k-1])
                 {
-                    int draft_current = draft_P + (k - 1);
-                    int draft_target  = draft_P + n_accepted;
+                    int draft_current = target_P + k;
+                    int draft_target  = target_P + 1 + n_accepted;
 
                     if (draft_current > draft_target) {
-                        // Rollback: discard rejected KV entries
                         draft_cache.n_past = draft_target;
                     } else if (draft_current < draft_target) {
                         // n_accepted == k: decode the last candidate
@@ -299,9 +310,8 @@ std::vector<int32_t> ar_speculative_generate(
                             goto loop_done;
                         }
                     }
-                    // else: draft_current == draft_target, nothing to do
 
-                    // Decode bonus on draft
+                    // Decode bonus on draft → get prev_draft_logits
                     if (!ar_forward_decode(draft_ctx, bonus,
                                            &draft_cache,
                                            prev_draft_logits.data())) {
@@ -310,7 +320,10 @@ std::vector<int32_t> ar_speculative_generate(
                     }
                 }
 
-                DIFFUSE_LOG("  spec: k=%d accepted=%d bonus=%d (%.0f%%)",
+                // Set pending for next iteration (deferred bonus)
+                pending = bonus;
+
+                DIFFUSE_LOG("  spec: k=%d accepted=%d bonus=%d (%.0f%%) [deferred]",
                             k, n_accepted, bonus,
                             k > 0 ? 100.0f * n_accepted / k : 0.0f);
             }
@@ -328,6 +341,8 @@ std::vector<int32_t> ar_speculative_generate(
         double total_ms = std::chrono::duration<double, std::milli>(
             gen_end - gen_start).count();
 
+        int total_target = stats.total_target_batches + stats.total_target_decodes;
+
         DIFFUSE_LOG("=== SPECULATIVE GENERATION COMPLETE ===");
         DIFFUSE_LOG("  prefill: %.1f ms (%d tok, %.1f tok/s)",
                     stats.prefill_ms, prompt_len,
@@ -340,19 +355,14 @@ std::vector<int32_t> ar_speculative_generate(
         DIFFUSE_LOG("  acceptance: %d/%d (%.1f%%)",
                     stats.total_accepted, stats.total_draft_tokens,
                     100.0f * stats.acceptance_rate());
-        DIFFUSE_LOG("  fast rejects: %d (d1 mismatch, no batch needed)",
+        DIFFUSE_LOG("  d1 rejects: %d (no bonus saved — deferred mode)",
                     stats.total_fast_rejects);
-        DIFFUSE_LOG("  target calls: %d batches + %d decodes",
-                    stats.total_target_batches, stats.total_target_decodes);
-        DIFFUSE_LOG("  effective: %.2f tok/target_call",
+        DIFFUSE_LOG("  target calls: %d batches + %d decodes = %d total",
+                    stats.total_target_batches, stats.total_target_decodes,
+                    total_target);
+        DIFFUSE_LOG("  effective: %.2f tok/target_call (deferred bonus)",
                     stats.tokens_per_target_call());
         DIFFUSE_LOG("  total: %.1f ms", total_ms);
-        DIFFUSE_LOG("  KV target: %d/%d pos (%.1f MB)",
-                    target_cache.n_past, target_cache.n_ctx_max,
-                    (float)target_cache.total_bytes() / (1024 * 1024));
-        DIFFUSE_LOG("  KV draft:  %d/%d pos (%.1f MB)",
-                    draft_cache.n_past, draft_cache.n_ctx_max,
-                    (float)draft_cache.total_bytes() / (1024 * 1024));
     }
 
 cleanup:
