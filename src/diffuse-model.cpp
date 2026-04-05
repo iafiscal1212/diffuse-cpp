@@ -105,10 +105,10 @@ diffuse_model * diffuse_model_load_impl(const std::string & path, int n_threads)
     hp.n_embd        = get_u32_multi(gctx, "embedding_length");
     hp.n_ff          = get_u32_multi(gctx, "feed_forward_length");
     hp.n_ctx_max     = get_u32_multi(gctx, "context_length", 4096);
-    hp.n_vocab       = get_u32_multi(gctx, "vocab_size");
+    hp.n_vocab       = get_u32_multi(gctx, "vocab_size", 0);  // may be absent in llama.cpp GGUF
     hp.mask_token_id = get_u32_multi(gctx, "mask_token_id", 0);  // 0 = no mask token (AR models)
-    hp.rope_theta    = get_f32_multi(gctx, "rope.freq_base", 500000.0f);
-    hp.rms_norm_eps  = get_f32_multi(gctx, "attention.layer_norm_rms_epsilon", 1e-5f);
+    hp.rope_theta    = get_f32_multi(gctx, "rope.freq_base", 1000000.0f);
+    hp.rms_norm_eps  = get_f32_multi(gctx, "attention.layer_norm_rms_epsilon", 1e-6f);
 
     // Read model type
     {
@@ -142,6 +142,13 @@ diffuse_model * diffuse_model_load_impl(const std::string & path, int n_threads)
     // Map tensors to model struct
     model->tok_embd    = get_tensor(meta_ctx, "token_embd.weight");
     model->output_norm = get_tensor(meta_ctx, "output_norm.weight");
+
+    // Infer n_vocab from token_embd if not in metadata
+    // In GGML: token_embd.weight has shape [n_embd, n_vocab] (ne[0]=n_embd, ne[1]=n_vocab)
+    if (hp.n_vocab == 0) {
+        hp.n_vocab = (uint32_t)model->tok_embd->ne[1];
+        DIFFUSE_LOG("  n_vocab inferred from token_embd: %u", hp.n_vocab);
+    }
 
     // lm_head — may or may not be present (tied embeddings)
     struct ggml_tensor * lm_head = ggml_get_tensor(meta_ctx, "output.weight");
