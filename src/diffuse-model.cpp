@@ -22,9 +22,12 @@ static float get_f32(const struct gguf_context * gctx, const char * key, float d
 // ── Multi-arch key resolution ────────────────────────────────────
 // Try diffuse.*, then qwen2.*, then llama.* prefixes.
 // This allows loading GGUF files produced by llama.cpp's converter.
+// required = true: die if not found and no default
+// required = false: return def if not found
 static uint32_t get_u32_multi(const struct gguf_context * gctx,
-                               const char * suffix, uint32_t def = 0) {
-    // Try prefixes in order of priority
+                               const char * suffix,
+                               uint32_t def = 0,
+                               bool required = true) {
     static const char * prefixes[] = { "diffuse", "qwen2", "llama", nullptr };
     char buf[128];
     for (int i = 0; prefixes[i]; i++) {
@@ -34,7 +37,7 @@ static uint32_t get_u32_multi(const struct gguf_context * gctx,
             return gguf_get_val_u32(gctx, id);
         }
     }
-    if (def != 0) return def;
+    if (!required) return def;
     DIFFUSE_DIE("missing GGUF metadata key: *.%s (tried diffuse/qwen2/llama)", suffix);
     return 0;  // unreachable
 }
@@ -105,8 +108,8 @@ diffuse_model * diffuse_model_load_impl(const std::string & path, int n_threads)
     hp.n_embd        = get_u32_multi(gctx, "embedding_length");
     hp.n_ff          = get_u32_multi(gctx, "feed_forward_length");
     hp.n_ctx_max     = get_u32_multi(gctx, "context_length", 4096);
-    hp.n_vocab       = get_u32_multi(gctx, "vocab_size", 0);  // may be absent in llama.cpp GGUF
-    hp.mask_token_id = get_u32_multi(gctx, "mask_token_id", 0);  // 0 = no mask token (AR models)
+    hp.n_vocab       = get_u32_multi(gctx, "vocab_size", 0, false);  // inferred from tensor if absent
+    hp.mask_token_id = get_u32_multi(gctx, "mask_token_id", 0, false);  // 0 = no mask token (AR models)
     hp.rope_theta    = get_f32_multi(gctx, "rope.freq_base", 1000000.0f);
     hp.rms_norm_eps  = get_f32_multi(gctx, "attention.layer_norm_rms_epsilon", 1e-6f);
 
