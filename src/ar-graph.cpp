@@ -133,19 +133,17 @@ static struct ggml_cgraph * ar_build_graph(
         struct ggml_tensor * V_full;
 
         if (n_past > 0) {
-            // Load cached K,V as input tensors
+            // Zero-copy: point GGML tensor directly at cache memory
             // Shape: [n_embd_head, n_head_kv, n_past]
             struct ggml_tensor * K_cached = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
                     n_embd_head, n_head_kv, n_past);
             ggml_set_input(K_cached);
-            memcpy(K_cached->data, cache->k_data(il),
-                   (size_t)n_past * cache->pos_stride() * sizeof(float));
+            K_cached->data = (void *)cache->k_data(il);
 
             struct ggml_tensor * V_cached = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
                     n_embd_head, n_head_kv, n_past);
             ggml_set_input(V_cached);
-            memcpy(V_cached->data, cache->v_data(il),
-                   (size_t)n_past * cache->pos_stride() * sizeof(float));
+            V_cached->data = (void *)cache->v_data(il);
 
             K_full = ggml_concat(ctx, K_cached, K_new, 2);
             V_full = ggml_concat(ctx, V_cached, V_new, 2);
