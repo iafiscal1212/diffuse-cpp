@@ -10,10 +10,11 @@ static struct ggml_tensor * ensure_f32(struct ggml_context * ctx, struct ggml_te
 // ── Build autoregressive forward graph ──────────────────────────
 //
 // Standard transformer with causal attention and KV cache.
-// Uses the same GGML ops as diffuse-graph.cpp but with:
-//   1. Causal mask via ggml_soft_max_ext
+// Uses ggml_flash_attn_ext for fused attention (handles GQA natively).
+//   1. Causal mask via F16 mask tensor + flash attention kernel
 //   2. KV cache append (only compute new tokens' K,V)
 //   3. RoPE with absolute positions (n_past + i)
+//   4. No GQA expansion needed (flash_attn broadcasts n_head_kv → n_head)
 //
 // n_new:  number of NEW tokens (full prompt for prefill, 1 for decode)
 // n_past: number of tokens already in KV cache
@@ -55,19 +56,21 @@ static struct ggml_cgraph * ar_build_graph(
         }
     }
 
-    // ── Causal attention mask ────────────────────────────────────
-    // Shape for ggml_soft_max_ext: [n_kv, n_new]
+    // ── Causal attention mask (F16 for ggml_flash_attn_ext) ──────
+    // Shape: [n_kv, n_new] — broadcasts over heads and batch dims
     // mask[k, q] = 0.0 if position k can be attended by query q, else -inf
     // For causal: q at absolute position (n_past+q) can see positions 0..(n_past+q)
-    struct ggml_tensor * attn_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_kv, n_new);
+    struct ggml_tensor * attn_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n_kv, n_new);
     ggml_set_name(attn_mask, "attn_mask");
     ggml_set_input(attn_mask);
     {
-        float * mask_data = (float *)attn_mask->data;
+        ggml_fp16_t * mask_data = (ggml_fp16_t *)attn_mask->data;
+        const ggml_fp16_t zero_f16 = ggml_fp32_to_fp16(0.0f);
+        const ggml_fp16_t ninf_f16 = ggml_fp32_to_fp16(-INFINITY);
         for (int q = 0; q < n_new; q++) {
             int q_abs = n_past + q;
             for (int k = 0; k < n_kv; k++) {
-                mask_data[q * n_kv + k] = (k <= q_abs) ? 0.0f : -INFINITY;
+                mask_data[q * n_kv + k] = (k <= q_abs) ? zero_f16 : ninf_f16;
             }
         }
     }
@@ -152,41 +155,29 @@ static struct ggml_cgraph * ar_build_graph(
         }
         // K_full, V_full: [n_embd_head, n_head_kv, n_kv]
 
-        // ── GQA: expand KV heads to match Q heads ───────────────
-        if (n_head_kv < n_head) {
-            const int n_rep = n_head / n_head_kv;
-            K_full = ggml_reshape_4d(ctx, K_full, n_embd_head, 1, n_head_kv, n_kv);
-            K_full = ggml_repeat(ctx, K_full,
-                    ggml_new_tensor_4d(ctx, K_full->type, n_embd_head, n_rep, n_head_kv, n_kv));
-            K_full = ggml_reshape_3d(ctx, K_full, n_embd_head, n_head, n_kv);
+        // ── Flash Attention (fused, handles GQA natively) ─────────
+        // ggml_flash_attn_ext expects:
+        //   Q: [n_embd_head, n_new,  n_head,    1]
+        //   K: [n_embd_head, n_kv,   n_head_kv, 1]
+        //   V: [n_embd_head, n_kv,   n_head_kv, 1]  (NOT transposed, contiguous)
+        //   mask: [n_kv, n_new, 1, 1] (F16)
+        //   result: [n_embd_head, n_head, n_new, 1] (already permuted)
+        //
+        // GQA broadcast: n_head % n_head_kv == 0 → handled by kernel
 
-            V_full = ggml_reshape_4d(ctx, V_full, n_embd_head, 1, n_head_kv, n_kv);
-            V_full = ggml_repeat(ctx, V_full,
-                    ggml_new_tensor_4d(ctx, V_full->type, n_embd_head, n_rep, n_head_kv, n_kv));
-            V_full = ggml_reshape_3d(ctx, V_full, n_embd_head, n_head, n_kv);
-        }
-
-        // ── Attention (same pattern as diffuse-graph.cpp) ────────
         // Q: [n_embd_head, n_head, n_new] → [n_embd_head, n_new, n_head]
         Q = ggml_permute(ctx, Q, 0, 2, 1, 3);
-        // K: [n_embd_head, n_head, n_kv] → [n_embd_head, n_kv, n_head]
+        // K: [n_embd_head, n_head_kv, n_kv] → [n_embd_head, n_kv, n_head_kv]
         K_full = ggml_permute(ctx, K_full, 0, 2, 1, 3);
-        // V: [n_embd_head, n_head, n_kv] → [n_kv, n_embd_head, n_head] (contiguous)
-        V_full = ggml_cont(ctx, ggml_permute(ctx, V_full, 1, 2, 0, 3));
+        // V: same permutation, must be contiguous
+        V_full = ggml_cont(ctx, ggml_permute(ctx, V_full, 0, 2, 1, 3));
 
-        // K^T @ Q → [n_kv, n_new, n_head]
-        struct ggml_tensor * attn = ggml_mul_mat(ctx, K_full, Q);
-
-        // Scale + causal mask + softmax (fused)
         float scale = 1.0f / sqrtf((float)n_embd_head);
-        attn = ggml_soft_max_ext(ctx, attn, attn_mask, scale, 0.0f);
+        struct ggml_tensor * attn_out = ggml_flash_attn_ext(
+                ctx, Q, K_full, V_full, attn_mask,
+                scale, 0.0f, 0.0f);
 
-        // V^T @ attn → [n_embd_head, n_new, n_head]
-        struct ggml_tensor * attn_out = ggml_mul_mat(ctx, V_full, attn);
-
-        // Merge heads: [n_embd_head, n_new, n_head] → [n_embd_head, n_head, n_new] → [n_embd, n_new]
-        attn_out = ggml_permute(ctx, attn_out, 0, 2, 1, 3);
-        attn_out = ggml_cont(ctx, attn_out);
+        // Result: [n_embd_head, n_head, n_new, 1] → [n_embd, n_new]
         attn_out = ggml_reshape_2d(ctx, attn_out, n_embd, n_new);
 
         // Output projection
@@ -244,27 +235,28 @@ static bool ar_forward_impl(
     const int n_head = (int)hp.n_head;
 
     // ── Compute buffer sizing ────────────────────────────────────
-    size_t per_layer = (size_t)n_new * hp.n_embd * sizeof(float) * 10
-                     + (size_t)n_new * hp.n_ff   * sizeof(float) * 3
-                     // Attention matrix: [n_kv, n_new, n_head] after GQA expansion
-                     + (size_t)n_kv * n_new * n_head * sizeof(float) * 2
+    // flash_attn_ext: no GQA expansion, no full attention matrix materialization
+    size_t per_layer = (size_t)n_new * hp.n_embd * sizeof(float) * 10  // QKV proj + norms
+                     + (size_t)n_new * hp.n_ff   * sizeof(float) * 3   // FFN (gate, up, down)
                      // Cached K,V input: [n_embd_head, n_head_kv, n_past] × 2
                      + (size_t)n_past * hp.n_embd_head() * hp.n_head_kv * sizeof(float) * 2
-                     // Expanded K,V: [n_embd_head, n_head, n_kv] × 2
-                     + (size_t)n_kv * hp.n_embd_head() * n_head * sizeof(float) * 4
+                     // K,V full (with new): [n_embd_head, n_head_kv, n_kv] × 2 (permuted + cont)
+                     + (size_t)n_kv * hp.n_embd_head() * hp.n_head_kv * sizeof(float) * 4
+                     // flash_attn working memory (per-thread)
+                     + (size_t)hp.n_embd_head() * sizeof(float) * 4 * ctx->n_threads
                      + hp.n_embd * sizeof(float) * 2;
     size_t buf_size = per_layer * hp.n_layer;
 
     // Logits buffer
     buf_size += (size_t)n_new * hp.n_vocab * sizeof(float) * 2;
 
-    // Mask tensor + positions
-    buf_size += (size_t)n_kv * n_new * sizeof(float);
+    // Mask tensor (F16) + positions
+    buf_size += (size_t)n_kv * n_new * sizeof(ggml_fp16_t);
     buf_size += n_new * sizeof(int32_t) * 2;
 
-    // Overhead
+    // Graph metadata overhead
     buf_size += 256ull * 1024 * 1024;
-    buf_size = (size_t)(buf_size * 1.3);
+    buf_size = (size_t)(buf_size * 1.2);
 
     struct ggml_init_params cparams = {
         /*.mem_size   = */ buf_size,

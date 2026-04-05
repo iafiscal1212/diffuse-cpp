@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 static void print_usage(const char * prog) {
     fprintf(stderr, "Usage: %s [options]\n", prog);
     fprintf(stderr, "\ndiffuse-cpp autoregressive inference engine\n");
@@ -21,6 +25,7 @@ static void print_usage(const char * prog) {
     fprintf(stderr, "  --repeat-last-n INT  Repeat penalty window (default: 64)\n");
     fprintf(stderr, "  --seed INT   Random seed (default: 42)\n");
     fprintf(stderr, "  --tokens IDs Comma-separated pre-tokenized input\n");
+    fprintf(stderr, "  --bind-cores  Bind threads to CPU cores (reduces jitter)\n");
     fprintf(stderr, "\nExample:\n");
     fprintf(stderr, "  %s -m thrombia-32b-q4.gguf --tokens 151644,8948,198,... -n 512 -t 12\n", prog);
 }
@@ -48,6 +53,7 @@ int main(int argc, char ** argv) {
     float repeat_penalty = 1.1f;
     int repeat_last_n = 64;
     uint32_t seed = 42;
+    bool bind_cores = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
@@ -72,6 +78,8 @@ int main(int argc, char ** argv) {
             seed = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tokens") == 0 && i + 1 < argc) {
             input_tokens = parse_tokens(argv[++i]);
+        } else if (strcmp(argv[i], "--bind-cores") == 0) {
+            bind_cores = true;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -103,6 +111,18 @@ int main(int argc, char ** argv) {
                         "tokenize=True, add_generation_prompt=True)\n"
                         "print(','.join(map(str, ids)))\"\n", prompt.c_str());
         return 1;
+    }
+
+    // Thread binding for reduced scheduling jitter
+    if (bind_cores) {
+#ifdef _OPENMP
+        omp_set_num_threads(n_threads);
+#endif
+        // Set environment for child threads (GGML uses pthreads internally)
+        setenv("OMP_PROC_BIND", "close", 0);    // don't override if already set
+        setenv("OMP_PLACES", "cores", 0);
+        setenv("GOMP_CPU_AFFINITY", "0-1023", 0);
+        fprintf(stderr, "Thread binding: enabled (%d threads, close/cores)\n", n_threads);
     }
 
     // Load model
