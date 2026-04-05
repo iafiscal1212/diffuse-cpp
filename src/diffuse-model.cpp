@@ -19,6 +19,54 @@ static float get_f32(const struct gguf_context * gctx, const char * key, float d
     return gguf_get_val_f32(gctx, id);
 }
 
+// ── Multi-arch key resolution ────────────────────────────────────
+// Try diffuse.*, then qwen2.*, then llama.* prefixes.
+// This allows loading GGUF files produced by llama.cpp's converter.
+static uint32_t get_u32_multi(const struct gguf_context * gctx,
+                               const char * suffix, uint32_t def = 0) {
+    // Try prefixes in order of priority
+    static const char * prefixes[] = { "diffuse", "qwen2", "llama", nullptr };
+    char buf[128];
+    for (int i = 0; prefixes[i]; i++) {
+        snprintf(buf, sizeof(buf), "%s.%s", prefixes[i], suffix);
+        int64_t id = gguf_find_key(gctx, buf);
+        if (id >= 0) {
+            return gguf_get_val_u32(gctx, id);
+        }
+    }
+    if (def != 0) return def;
+    DIFFUSE_DIE("missing GGUF metadata key: *.%s (tried diffuse/qwen2/llama)", suffix);
+    return 0;  // unreachable
+}
+
+static float get_f32_multi(const struct gguf_context * gctx,
+                            const char * suffix, float def) {
+    static const char * prefixes[] = { "diffuse", "qwen2", "llama", nullptr };
+    char buf[128];
+    for (int i = 0; prefixes[i]; i++) {
+        snprintf(buf, sizeof(buf), "%s.%s", prefixes[i], suffix);
+        int64_t id = gguf_find_key(gctx, buf);
+        if (id >= 0) {
+            return gguf_get_val_f32(gctx, id);
+        }
+    }
+    return def;
+}
+
+// Detect the architecture prefix used in this GGUF file
+static std::string detect_arch_prefix(const struct gguf_context * gctx) {
+    // Check general.architecture first (standard llama.cpp key)
+    int64_t id = gguf_find_key(gctx, "general.architecture");
+    if (id >= 0) {
+        return gguf_get_val_str(gctx, id);
+    }
+    // Fallback: check which prefix has block_count
+    if (gguf_find_key(gctx, "diffuse.block_count") >= 0) return "diffuse";
+    if (gguf_find_key(gctx, "qwen2.block_count") >= 0) return "qwen2";
+    if (gguf_find_key(gctx, "llama.block_count") >= 0) return "llama";
+    return "unknown";
+}
+
 // ── Tensor lookup helper ───────────────────────────────────────
 static struct ggml_tensor * get_tensor(struct ggml_context * ctx, const char * name) {
     struct ggml_tensor * t = ggml_get_tensor(ctx, name);
@@ -43,40 +91,50 @@ diffuse_model * diffuse_model_load_impl(const std::string & path, int n_threads)
         DIFFUSE_DIE("failed to open GGUF file: %s", path.c_str());
     }
 
-    // Parse hyperparameters (standard GGUF key names)
+    // Parse hyperparameters — supports diffuse.*, qwen2.*, llama.* prefixes
     auto * model = new diffuse_model();
     auto & hp = model->hparams;
 
-    hp.n_layer       = get_u32(gctx, "diffuse.block_count");
-    hp.n_head        = get_u32(gctx, "diffuse.attention.head_count");
-    hp.n_head_kv     = get_u32(gctx, "diffuse.attention.head_count_kv");
-    hp.n_embd        = get_u32(gctx, "diffuse.embedding_length");
-    hp.n_ff          = get_u32(gctx, "diffuse.feed_forward_length");
-    hp.n_ctx_max     = get_u32(gctx, "diffuse.context_length");
-    hp.n_vocab       = get_u32(gctx, "diffuse.vocab_size");
-    hp.mask_token_id = get_u32(gctx, "diffuse.mask_token_id");
-    hp.rope_theta    = get_f32(gctx, "diffuse.rope.freq_base", 500000.0f);
-    hp.rms_norm_eps  = get_f32(gctx, "diffuse.attention.layer_norm_rms_epsilon", 1e-5f);
+    // Detect architecture
+    std::string arch = detect_arch_prefix(gctx);
+    DIFFUSE_LOG("  detected arch prefix: %s", arch.c_str());
 
-    // Read model type (llada, dream, etc.)
+    hp.n_layer       = get_u32_multi(gctx, "block_count");
+    hp.n_head        = get_u32_multi(gctx, "attention.head_count");
+    hp.n_head_kv     = get_u32_multi(gctx, "attention.head_count_kv");
+    hp.n_embd        = get_u32_multi(gctx, "embedding_length");
+    hp.n_ff          = get_u32_multi(gctx, "feed_forward_length");
+    hp.n_ctx_max     = get_u32_multi(gctx, "context_length", 4096);
+    hp.n_vocab       = get_u32_multi(gctx, "vocab_size");
+    hp.mask_token_id = get_u32_multi(gctx, "mask_token_id", 0);  // 0 = no mask token (AR models)
+    hp.rope_theta    = get_f32_multi(gctx, "rope.freq_base", 500000.0f);
+    hp.rms_norm_eps  = get_f32_multi(gctx, "attention.layer_norm_rms_epsilon", 1e-5f);
+
+    // Read model type
     {
         int64_t id = gguf_find_key(gctx, "diffuse.model_type");
         if (id >= 0) {
             model->model_type = gguf_get_val_str(gctx, id);
+        } else if (arch == "qwen2") {
+            model->model_type = "qwen2";  // autoregressive Qwen2.5
+        } else if (arch == "llama") {
+            model->model_type = "llama";  // autoregressive Llama
         } else {
-            model->model_type = "llada";  // default for older GGUF files
+            model->model_type = "llada";  // default for older diffuse GGUF files
         }
     }
 
     const char * arch_name = "unknown";
-    if (model->model_type == "llada") arch_name = "LLaDA (Llama backbone)";
-    else if (model->model_type == "dream") arch_name = "Dream (Qwen2.5 backbone, GQA)";
+    if (model->model_type == "llada")  arch_name = "LLaDA (Llama backbone, diffusion)";
+    else if (model->model_type == "dream")  arch_name = "Dream (Qwen2.5 backbone, diffusion)";
+    else if (model->model_type == "qwen2")  arch_name = "Qwen2.5 (autoregressive)";
+    else if (model->model_type == "llama")  arch_name = "Llama (autoregressive)";
 
     DIFFUSE_LOG("  arch: %s", arch_name);
     DIFFUSE_LOG("  n_vocab=%u, n_embd=%u, n_head=%u/%u(kv), n_layer=%u, n_ff=%u",
                 hp.n_vocab, hp.n_embd, hp.n_head, hp.n_head_kv, hp.n_layer, hp.n_ff);
-    DIFFUSE_LOG("  mask_token_id=%u, rope_theta=%.0f, rms_norm_eps=%.1e",
-                hp.mask_token_id, hp.rope_theta, hp.rms_norm_eps);
+    DIFFUSE_LOG("  rope_theta=%.0f, rms_norm_eps=%.1e, mask_token=%u",
+                hp.rope_theta, hp.rms_norm_eps, hp.mask_token_id);
 
     // The weight context is the one that gguf_init populated
     model->ctx = meta_ctx;

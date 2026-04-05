@@ -90,4 +90,29 @@ std::vector<int32_t> diffuse_generate(
     const diffuse_sampler_params & params,
     diffuse_step_callback callback = nullptr);
 
+// ═══════════════════════════════════════════════════════════════
+// ── Autoregressive API ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+// ── AR sampler parameters ─────────────────────────────────────
+struct ar_sampler_params {
+    float    temperature    = 0.0f;   // 0 = greedy/argmax
+    float    top_p          = 0.9f;   // nucleus sampling
+    int      top_k          = 40;     // top-k (0 = disabled)
+    float    repeat_penalty = 1.1f;   // repetition penalty
+    int      repeat_last_n  = 64;     // window for repeat penalty
+    uint32_t seed           = 42;
+};
+
+// ── AR token callback (return false to stop) ──────────────────
+using ar_token_callback = std::function<bool(int32_t token, int pos)>;
+
+// ── AR generation ─────────────────────────────────────────────
+std::vector<int32_t> ar_generate(
+    diffuse_context * ctx,
+    const std::vector<int32_t> & prompt_tokens,
+    int max_tokens,
+    const ar_sampler_params & params,
+    ar_token_callback callback = nullptr);
+
 // end of diffuse.h

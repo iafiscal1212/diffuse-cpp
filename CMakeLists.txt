@@ -15,11 +15,13 @@ set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP ON CACHE BOOL "" FORCE)
 add_subdirectory(ggml)
 
-# ── Core library ────────────────────────────────────────────────
+# ── Core library (diffusion + autoregressive) ─────────────────
 add_library(diffuse
     src/diffuse-model.cpp
     src/diffuse-graph.cpp
     src/diffuse-sampler.cpp
+    src/ar-graph.cpp
+    src/ar-sampler.cpp
 )
 target_include_directories(diffuse PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -29,8 +31,13 @@ target_link_libraries(diffuse PUBLIC ggml)
 
 # ── CLI tools ───────────────────────────────────────────────────
 if(DIFFUSE_BUILD_TOOLS)
+    # Diffusion CLI (LLaDA, Dream)
     add_executable(diffuse-cli tools/main-cli.cpp)
     target_link_libraries(diffuse-cli PRIVATE diffuse)
+
+    # Autoregressive CLI (Qwen2.5, Llama, etc.)
+    add_executable(diffuse-ar tools/ar-cli.cpp)
+    target_link_libraries(diffuse-ar PRIVATE diffuse)
 
     add_executable(diffuse-bench tools/main-bench.cpp)
     target_link_libraries(diffuse-bench PRIVATE diffuse)
