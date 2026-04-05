@@ -14,6 +14,11 @@
 //
 // K and V are stored BEFORE GQA expansion (n_head_kv, not n_head)
 // to save memory. GQA repeat happens in the graph at attention time.
+//
+// Also holds persistent compute resources (buffer, threadpool, work data)
+// to avoid malloc/free and thread creation overhead each decode step.
+
+struct ggml_threadpool;  // forward declaration
 
 struct ar_kv_cache {
     bool initialized = false;
@@ -28,6 +33,13 @@ struct ar_kv_cache {
     // Access pattern: cache[layer][pos * stride ... (pos+1) * stride]
     std::vector<std::vector<float>> K;  // K[layer]
     std::vector<std::vector<float>> V;  // V[layer]
+
+    // ── Persistent compute resources (avoid malloc/free per step) ──
+    void *   compute_buf      = nullptr;   // pre-allocated GGML context buffer
+    size_t   compute_buf_size = 0;
+    uint8_t * work_buf        = nullptr;   // pre-allocated graph work buffer
+    size_t   work_buf_size    = 0;
+    struct ggml_threadpool * threadpool = nullptr;  // persistent thread pool
 
     // ── Lifecycle ────────────────────────────────────────────────
 
@@ -57,6 +69,14 @@ struct ar_kv_cache {
         V.clear();
         n_past = 0;
         initialized = false;
+        free_compute_resources();
+    }
+
+    void free_compute_resources() {
+        if (compute_buf) { free(compute_buf); compute_buf = nullptr; compute_buf_size = 0; }
+        if (work_buf)    { free(work_buf);    work_buf = nullptr;    work_buf_size = 0;    }
+        // threadpool freed externally (owned by caller who created it)
+        threadpool = nullptr;
     }
 
     // Reset to empty (keep allocation)
@@ -72,6 +92,30 @@ struct ar_kv_cache {
     // Total bytes of the cache
     size_t total_bytes() const {
         return (size_t)2 * n_layer * n_ctx_max * pos_stride() * sizeof(float);
+    }
+
+    // ── Ensure compute buffer is large enough ─────────────────────
+    void ensure_compute_buf(size_t needed) {
+        if (needed <= compute_buf_size) return;
+        free(compute_buf);
+        compute_buf_size = needed;
+        compute_buf = malloc(compute_buf_size);
+        if (!compute_buf) {
+            DIFFUSE_DIE("ar_kv_cache: failed to allocate compute buffer (%zu MB)",
+                        compute_buf_size / (1024 * 1024));
+        }
+    }
+
+    // ── Ensure work buffer is large enough ────────────────────────
+    void ensure_work_buf(size_t needed) {
+        if (needed <= work_buf_size) return;
+        free(work_buf);
+        work_buf_size = needed;
+        work_buf = (uint8_t *)malloc(work_buf_size);
+        if (!work_buf) {
+            DIFFUSE_DIE("ar_kv_cache: failed to allocate work buffer (%zu MB)",
+                        work_buf_size / (1024 * 1024));
+        }
     }
 
     // ── Append new K,V for n_new tokens at positions [n_past, n_past+n_new) ──
@@ -91,7 +135,6 @@ struct ar_kv_cache {
             memmove(V[layer].data(), V[layer].data() + n_new * stride, shift_bytes);
             memcpy(K[layer].data() + (n_ctx_max - n_new) * stride, K_new, new_bytes);
             memcpy(V[layer].data() + (n_ctx_max - n_new) * stride, V_new, new_bytes);
-            // n_past stays at n_ctx_max (updated by caller only once after all layers)
             return;
         }
 

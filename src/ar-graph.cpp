@@ -256,14 +256,17 @@ static bool ar_forward_impl(
     buf_size += 256ull * 1024 * 1024;
     buf_size = (size_t)(buf_size * 1.2);
 
+    // Use persistent compute buffer if available (avoids malloc/free each step)
+    cache->ensure_compute_buf(buf_size);
+
     struct ggml_init_params cparams = {
-        /*.mem_size   = */ buf_size,
-        /*.mem_buffer = */ nullptr,
+        /*.mem_size   = */ cache->compute_buf_size,
+        /*.mem_buffer = */ cache->compute_buf,
         /*.no_alloc   = */ false,
     };
     struct ggml_context * ctx_compute = ggml_init(cparams);
     if (!ctx_compute) {
-        DIFFUSE_LOG("ar_forward: failed to allocate compute context (%zu MB)",
+        DIFFUSE_LOG("ar_forward: failed to init compute context (%zu MB)",
                     buf_size / (1024 * 1024));
         return false;
     }
@@ -271,7 +274,15 @@ static bool ar_forward_impl(
     struct ggml_cgraph * gf = ar_build_graph(ctx, ctx_compute, tokens,
                                               n_new, n_past, cache);
 
-    enum ggml_status status = ggml_graph_compute_with_ctx(ctx_compute, gf, ctx->n_threads);
+    // Use persistent threadpool + work buffer for graph compute
+    struct ggml_cplan plan = ggml_graph_plan(gf, ctx->n_threads, cache->threadpool);
+
+    if (plan.work_size > 0) {
+        cache->ensure_work_buf(plan.work_size);
+        plan.work_data = cache->work_buf;
+    }
+
+    enum ggml_status status = ggml_graph_compute(gf, &plan);
     if (status != GGML_STATUS_SUCCESS) {
         DIFFUSE_LOG("ar_forward: graph compute failed with status %d", (int)status);
         ggml_free(ctx_compute);

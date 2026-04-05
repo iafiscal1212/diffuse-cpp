@@ -1,5 +1,6 @@
 #include "ar-sampler.h"
 #include "ar-graph.h"
+#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <numeric>
@@ -159,6 +160,18 @@ std::vector<int32_t> ar_generate(
     cache.init(total_ctx, (int)hp.n_layer, (int)hp.n_embd_head(),
                (int)hp.n_head_kv);
 
+    // Create persistent threadpool (reused across all decode steps)
+    {
+        struct ggml_threadpool_params tparams = ggml_threadpool_params_default(ctx->n_threads);
+        tparams.strict_cpu = true;   // bind threads to cores
+        tparams.prio = GGML_SCHED_PRIO_HIGH;
+        cache.threadpool = ggml_threadpool_new(&tparams);
+        if (cache.threadpool) {
+            DIFFUSE_LOG("  threadpool: %d threads (persistent, high priority)",
+                        ggml_threadpool_get_n_threads(cache.threadpool));
+        }
+    }
+
     // RNG
     std::mt19937 rng(params.seed);
 
@@ -281,6 +294,11 @@ done:
                 cache.n_past, cache.n_ctx_max,
                 (float)cache.total_bytes() / (1024 * 1024));
 
+    // Free threadpool before clearing cache
+    if (cache.threadpool) {
+        ggml_threadpool_free(cache.threadpool);
+        cache.threadpool = nullptr;
+    }
     cache.clear();
     return generated;
 }
