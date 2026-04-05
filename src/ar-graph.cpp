@@ -86,6 +86,9 @@ static struct ggml_cgraph * ar_build_graph(
     // ── Embedding lookup ─────────────────────────────────────────
     struct ggml_tensor * cur = ggml_get_rows(ctx, model.tok_embd, inp_tokens);
 
+    // Profile tensors collected here, added to graph after main forward
+    std::vector<struct ggml_tensor *> profile_tensors;
+
     // ── Transformer layers ───────────────────────────────────────
     for (int il = 0; il < n_layer; il++) {
         // Layer skip (VSIDS-inspired): skip least important layers during decode
@@ -226,6 +229,7 @@ static struct ggml_cgraph * ar_build_graph(
             snprintf(name_buf, sizeof(name_buf), "limp.%02d", il);
             ggml_set_name(dsq, name_buf);
             ggml_set_output(dsq);
+            profile_tensors.push_back(dsq);
         }
     }
 
@@ -243,6 +247,13 @@ static struct ggml_cgraph * ar_build_graph(
     ggml_set_output(cur);
 
     ggml_build_forward_expand(gf, cur);
+
+    // Add profiling tensors to forward graph (they depend on layer outputs
+    // already in the graph, so only sub/sqr/sum nodes get added)
+    for (auto * pt : profile_tensors) {
+        ggml_build_forward_expand(gf, pt);
+    }
+
     return gf;
 }
 
@@ -473,7 +484,7 @@ bool ar_profile_layers(
         // Report top/bottom layer impacts
         DIFFUSE_LOG("  lowest impact layers:");
         for (int i = 0; i < std::min(n_skip + 4, n_layer); i++) {
-            DIFFUSE_LOG("    layer %2d: impact = %.2f%s",
+            DIFFUSE_LOG("    layer %2d: impact = %.6e%s",
                         ranked[i].second, ranked[i].first,
                         (ranked[i].second < 2 || ranked[i].second >= n_layer - 2)
                             ? " [PROTECTED]" : "");
