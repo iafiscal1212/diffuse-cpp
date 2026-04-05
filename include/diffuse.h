@@ -120,7 +120,7 @@ std::vector<int32_t> ar_generate(
 // ═══════════════════════════════════════════════════════════════
 
 struct ar_spec_params {
-    int K = 4;   // speculative lookahead (draft tokens per round)
+    int K = 5;   // speculative lookahead (draft tokens per round)
 };
 
 struct ar_spec_stats {
